@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -10,8 +11,11 @@ import 'local_db.dart';
 import 'customer_form_page.dart';
 import 'customer_detail_page.dart';
 import 'settings_page.dart';
+import 'vehicles_due_page.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const BlueSkyApp());
 }
 
@@ -52,17 +56,14 @@ class _AuthGateState extends State<_AuthGate> {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token') ?? '';
 
-    // Try token refresh first (silent persistent login)
+    // Try token refresh first (silent persistent login).
+    // Do NOT wipe local data here — only wipe on explicit login/logout.
     if (token.isNotEmpty) {
       try {
         final res = await _api.refreshToken(token);
         _api.setToken(token);
         await prefs.setString('company_id',   res['company_id']   ?? '');
         await prefs.setString('company_name', res['company_name'] ?? '');
-        // Clear stale outbox to prevent seq conflicts on fresh session
-        final deviceId = prefs.getString('device_id') ?? '';
-        if (deviceId.isNotEmpty) await LocalDb.instance.clearAllLocalData(deviceId);
-        await prefs.setInt('since_seq', 0);
         setState(() { _loggedIn = true; _checking = false; });
         return;
       } catch (_) {
@@ -82,9 +83,6 @@ class _AuthGateState extends State<_AuthGate> {
         await prefs.setString('auth_token',   newToken);
         await prefs.setString('company_id',   res['company_id']   ?? '');
         await prefs.setString('company_name', res['company_name'] ?? '');
-        final deviceId2 = prefs.getString('device_id') ?? '';
-        if (deviceId2.isNotEmpty) await LocalDb.instance.clearAllLocalData(deviceId2);
-        await prefs.setInt('since_seq', 0);
         setState(() { _loggedIn = true; _checking = false; });
         return;
       } catch (_) {
@@ -155,6 +153,8 @@ class _CustomersPageState extends State<CustomersPage> {
     await _checkSubStatus();
     if (widget.autoSync) {
       _timer?.cancel();
+      // Sync immediately on startup, then continue on 8-second interval
+      _syncNow(showSnack: false);
       _timer = Timer.periodic(const Duration(seconds: 8), (_) => _syncNow(showSnack: false));
     }
   }
@@ -290,6 +290,13 @@ class _CustomersPageState extends State<CustomersPage> {
                 : const Icon(Icons.sync),
             tooltip: 'Sync',
             onPressed: _syncing ? null : () => _syncNow(showSnack: true),
+          ),
+          IconButton(
+            icon: const Icon(Icons.event_outlined),
+            tooltip: 'Vehicles Due',
+            onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => VehiclesDuePage(
+                    deviceId: _deviceId))),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
