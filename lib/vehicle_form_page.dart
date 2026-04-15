@@ -107,9 +107,40 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     setState(() => _saving = true);
     try {
       final vehicleId = widget.vehicleId ?? const Uuid().v4();
+
+      // Compute nextTestDue from the last finalized invoice date for this vehicle.
+      // Falls back to today if no finalized invoice exists.
+      // On edit, only recalculate if the interval changed or no date is set yet.
+      String? nextTestDue;
+      if (_testIntervalDays != null) {
+        final existing = _isEdit ? await db.getVehicle(vehicleId) : null;
+        final existingDue = existing?['next_test_due'] as String?;
+        final existingInterval = existing?['test_interval_days'] as int?;
+
+        final needsRecalc = !_isEdit ||
+            existingDue == null || existingDue.isEmpty ||
+            existingInterval != _testIntervalDays;
+
+        if (needsRecalc) {
+          // Use last finalized invoice date as base; fall back to today
+          final lastInvDate = _isEdit
+              ? await db.getLastFinalizedInvoiceDateForVehicle(vehicleId)
+              : null;
+          final baseDate = lastInvDate != null
+              ? DateTime.tryParse(lastInvDate) ?? DateTime.now()
+              : DateTime.now();
+          nextTestDue = baseDate
+              .add(Duration(days: _testIntervalDays!))
+              .toIso8601String()
+              .substring(0, 10);
+        }
+        // else: interval unchanged and due date already set — preserve existing
+      }
+
       await db.upsertVehicle(
         vehicleId: vehicleId, customerId: widget.customerId,
         deviceId: widget.deviceId,
@@ -118,6 +149,7 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
         year: _n(_yearCtl), odometer: _n(_odometerCtl),
         serviceType: _serviceType,
         testIntervalDays: _testIntervalDays,
+        nextTestDue: nextTestDue,
         eventId: const Uuid().v4(),
         seq: DateTime.now().millisecondsSinceEpoch,
       );
@@ -156,7 +188,7 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
               ? const Padding(padding: EdgeInsets.all(16),
                   child: SizedBox(width: 20, height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2)))
-              : TextButton(onPressed: _save,
+              : TextButton(onPressed: _saving ? null : _save,
                   child: const Text('Save',
                       style: TextStyle(fontWeight: FontWeight.bold))),
         ],
