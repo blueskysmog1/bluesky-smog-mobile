@@ -1664,6 +1664,19 @@ class LocalDb {
   }
 
   /// Soft-delete an invoice (and its items) and queue a delete event.
+  /// Soft-delete invoice on this device only — no outbox event, no server sync.
+  /// Used for finalized invoices where the server record should be preserved.
+  Future<void> deleteInvoiceLocal({required String invoiceId}) async {
+    final db = await database;
+    final seq = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      await txn.update('invoices', {'deleted': 1, 'seq': seq},
+          where: 'invoice_id = ?', whereArgs: [invoiceId]);
+      await txn.update('invoice_items', {'deleted': 1, 'seq': seq},
+          where: 'invoice_id = ?', whereArgs: [invoiceId]);
+    });
+  }
+
   Future<void> deleteInvoice({
     required String invoiceId,
     required String deviceId,

@@ -20,13 +20,14 @@ class _ReportsPageState extends State<ReportsPage>
   _ReportData? _dayData;
   _ReportData? _weekData;
   _ReportData? _monthData;
+  List<Map<String, dynamic>> _balances = [];
 
   bool _loading = false;
 
   @override
   void initState() {
     super.initState();
-    _tabCtl = TabController(length: 3, vsync: this);
+    _tabCtl = TabController(length: 4, vsync: this);
     _tabCtl.addListener(() => setState(() {}));
     _load();
   }
@@ -71,7 +72,11 @@ class _ReportsPageState extends State<ReportsPage>
       final mFirst = DateTime(_selectedDate.year, _selectedDate.month, 1);
       final mLast  = DateTime(_selectedDate.year, _selectedDate.month + 1, 0);
       final m = await _loadReport(_fmt(mFirst), _fmt(mLast));
-      if (mounted) setState(() { _dayData = d; _weekData = w; _monthData = m; });
+      final allAccts = await db.listAccountCustomers();
+      final bal = allAccts.where((r) => ((r['balance_cents'] as int?) ?? 0) > 0).toList();
+      if (mounted) setState(() {
+        _dayData = d; _weekData = w; _monthData = m; _balances = bal;
+      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -314,6 +319,7 @@ class _ReportsPageState extends State<ReportsPage>
             Tab(text: 'Daily'),
             Tab(text: 'Weekly'),
             Tab(text: 'Monthly'),
+            Tab(text: 'Balances'),
           ],
         ),
         actions: [
@@ -343,6 +349,7 @@ class _ReportsPageState extends State<ReportsPage>
                 _buildDayTab(),
                 _buildWeekTab(),
                 _buildMonthTab(),
+                _buildBalancesTab(),
               ],
             ),
     );
@@ -425,6 +432,74 @@ class _ReportsPageState extends State<ReportsPage>
         const SizedBox(height: 6),
         ...data.invoices.map((inv) => _InvoiceTile(inv: inv)),
       ],
+    ]);
+  }
+
+  // ── Balances tab ──────────────────────────────────────────────────────────
+
+  Widget _buildBalancesTab() {
+    if (_balances.isEmpty) {
+      return const Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.check_circle_outline, size: 48, color: Colors.green),
+          SizedBox(height: 12),
+          Text('No outstanding account balances',
+              style: TextStyle(fontSize: 16, color: Colors.grey)),
+        ]),
+      );
+    }
+
+    final totalCents = _balances.fold<int>(
+        0, (sum, r) => sum + ((r['balance_cents'] as int?) ?? 0));
+
+    return Column(children: [
+      // Total banner
+      Container(
+        width: double.infinity,
+        color: Colors.red.shade50,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          const Icon(Icons.account_balance_wallet_outlined, color: Colors.red),
+          const SizedBox(width: 8),
+          Text('${_balances.length} account${_balances.length == 1 ? '' : 's'} outstanding',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+          const Spacer(),
+          Text('Total: \$${(totalCents / 100).toStringAsFixed(2)}',
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, color: Colors.red, fontSize: 15)),
+        ]),
+      ),
+      // List
+      Expanded(
+        child: ListView.separated(
+          padding: const EdgeInsets.all(12),
+          itemCount: _balances.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (_, i) {
+            final r       = _balances[i];
+            final cents   = (r['balance_cents'] as int?) ?? 0;
+            final name    = (r['company_name'] as String?)?.isNotEmpty == true
+                ? r['company_name'] as String
+                : '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.trim().isNotEmpty == true
+                    ? '${r['first_name'] ?? ''} ${r['last_name'] ?? ''}'.trim()
+                    : (r['name'] as String?) ?? 'Unknown';
+            final phone   = (r['phone'] as String?) ?? '';
+            final email   = (r['email'] as String?) ?? '';
+            return ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: phone.isNotEmpty || email.isNotEmpty
+                  ? Text([if (phone.isNotEmpty) phone, if (email.isNotEmpty) email].join(' · '))
+                  : null,
+              trailing: Text(
+                '\$${(cents / 100).toStringAsFixed(2)}',
+                style: const TextStyle(
+                    color: Colors.red, fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+            );
+          },
+        ),
+      ),
     ]);
   }
 

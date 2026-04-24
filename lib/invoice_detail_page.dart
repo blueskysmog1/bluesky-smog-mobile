@@ -594,10 +594,14 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
 
   // ── Delete ────────────────────────────────────────────────────────
   Future<void> _deleteInvoice() async {
+    final isFinalized = _isFinalized;
     final ok = await showDialog<bool>(context: context,
         builder: (_) => AlertDialog(
           title: const Text('Delete Invoice'),
-          content: const Text('Delete this invoice on all devices?'),
+          content: Text(isFinalized
+              ? 'Remove this invoice from this device only.\n\n'
+                'The invoice will remain on the server and other devices.'
+              : 'Delete this invoice on all devices?'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context, false),
                 child: const Text('Cancel')),
@@ -607,11 +611,18 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
           ],
         ));
     if (ok != true || !mounted) return;
-    await db.deleteInvoice(
-      invoiceId: widget.invoiceId, deviceId: widget.deviceId,
-      eventId: const Uuid().v4(), seq: DateTime.now().millisecondsSinceEpoch,
-    );
-    await widget.scheduleSync?.call();
+
+    if (isFinalized) {
+      // Local-only soft delete — does not sync to server
+      await db.deleteInvoiceLocal(invoiceId: widget.invoiceId);
+    } else {
+      // Full delete synced to all devices
+      await db.deleteInvoice(
+        invoiceId: widget.invoiceId, deviceId: widget.deviceId,
+        eventId: const Uuid().v4(), seq: DateTime.now().millisecondsSinceEpoch,
+      );
+      await widget.scheduleSync?.call();
+    }
     if (mounted) Navigator.of(context).pop(true);
   }
 
