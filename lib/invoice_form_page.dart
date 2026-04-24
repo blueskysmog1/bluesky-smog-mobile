@@ -31,7 +31,11 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
   bool _loading = true, _saving = false;
   bool get _isEdit => widget.invoiceId != null;
 
-  static const _paymentMethods = ['CASH', 'CARD', 'CHECK', 'CHARGE', 'OTHER'];
+  static const _paymentMethods = [
+    'CASH', 'CARD', 'VISA', 'MASTERCARD', 'AMEX', 'DISCOVER',
+    'CHECK', 'CHARGE', 'OTHER',
+  ];
+  static const _cardMethods = {'CARD', 'VISA', 'MASTERCARD', 'AMEX', 'DISCOVER'};
   static const _statuses = ['ESTIMATE'];
 
   @override

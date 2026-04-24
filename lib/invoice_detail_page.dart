@@ -249,8 +249,9 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setst) {
             final subtotalCents = (inv['amount_cents'] as int?) ?? 0;
+            const _cardMethods = {'CARD', 'VISA', 'MASTERCARD', 'AMEX', 'DISCOVER'};
             int surchargeCents = 0;
-            if (selectedPayment == 'CARD' && surchargeNum > 0 && applySurcharge) {
+            if (_cardMethods.contains(selectedPayment) && surchargeNum > 0 && applySurcharge) {
               surchargeCents = surchargeIsPercent
                   ? (subtotalCents * surchargeNum / 100).round()
                   : (surchargeNum * 100).round();
@@ -271,13 +272,14 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.payment_outlined),
                   ),
-                  items: ['CASH', 'CARD', 'CHECK', 'CHARGE', 'OTHER']
-                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                      .toList(),
+                  items: [
+                    'CASH', 'CARD', 'VISA', 'MASTERCARD', 'AMEX', 'DISCOVER',
+                    'CHECK', 'CHARGE', 'OTHER',
+                  ].map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
                   onChanged: (v) =>
                       setst(() { selectedPayment = v!; applySurcharge = true; }),
                 ),
-                if (selectedPayment == 'CARD' && surchargeNum > 0) ...[
+                if (_cardMethods.contains(selectedPayment) && surchargeNum > 0) ...[
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(10),
@@ -375,7 +377,8 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     if (confirmed != true || !mounted) return;
 
     // Auto-add card surcharge line item before finalizing (only if checkbox was on)
-    if (selectedPayment == 'CARD' && surchargeNum > 0 && applySurcharge) {
+    const _cardMethodsFinal = {'CARD', 'VISA', 'MASTERCARD', 'AMEX', 'DISCOVER'};
+    if (_cardMethodsFinal.contains(selectedPayment) && surchargeNum > 0 && applySurcharge) {
       final subtotalCents = (invoice?['amount_cents'] as int?) ?? 0;
       final surchargeCents = surchargeIsPercent
           ? (subtotalCents * surchargeNum / 100).round()
@@ -709,14 +712,14 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                     onPressed: _downloadPdf,
                   ),
           ] else ...[
-            // Edit & delete only when not finalized
             IconButton(icon: const Icon(Icons.edit_outlined),
                 tooltip: 'Edit', onPressed: inv == null ? null : _openEdit),
-            IconButton(
-                icon: const Icon(Icons.delete_outline, color: Colors.red),
-                tooltip: 'Delete',
-                onPressed: inv == null ? null : _deleteInvoice),
           ],
+          // Delete always available (finalized or not)
+          IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.red),
+              tooltip: 'Delete Invoice',
+              onPressed: inv == null ? null : _deleteInvoice),
         ],
       ),
       body: inv == null
