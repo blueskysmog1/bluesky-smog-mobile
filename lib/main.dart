@@ -6,13 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
-
-const String _appVersion = '1.0.1';
-const String _updateApiUrl =
-    'https://api.github.com/repos/blueskysmog1/bluesky-smog-mobile/releases/latest';
-const String _downloadUrl =
-    'https://github.com/blueskysmog1/bluesky-smog-mobile/releases/latest/download/app-release.apk';
-
 import 'account_page.dart';
 import 'api_service.dart';
 import 'login_page.dart';
@@ -21,6 +14,12 @@ import 'customer_form_page.dart';
 import 'customer_detail_page.dart';
 import 'settings_page.dart';
 import 'vehicles_due_page.dart';
+
+const String _appVersion = '1.2.1';
+const String _updateApiUrl =
+    'https://api.github.com/repos/blueskysmog1/bluesky-smog-mobile/releases/latest';
+const String _downloadUrl =
+    'https://github.com/blueskysmog1/bluesky-smog-mobile/releases/latest/download/app-release.apk';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
