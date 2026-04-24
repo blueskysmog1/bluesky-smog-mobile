@@ -4,6 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
+
+const String _appVersion = '1.0.1';
+const String _updateApiUrl =
+    'https://api.github.com/repos/blueskysmog1/bluesky-smog-mobile/releases/latest';
+const String _downloadUrl =
+    'https://github.com/blueskysmog1/bluesky-smog-mobile/releases/latest/download/app-release.apk';
 
 import 'account_page.dart';
 import 'api_service.dart';
@@ -51,6 +59,60 @@ class _AuthGateState extends State<_AuthGate> {
   void initState() {
     super.initState();
     _checkSession();
+    // Check for app update 4 seconds after launch
+    Future.delayed(const Duration(seconds: 4), _checkForUpdate);
+  }
+
+  Future<void> _checkForUpdate() async {
+    try {
+      final res = await http.get(
+        Uri.parse(_updateApiUrl),
+        headers: {'User-Agent': 'BlueSkyMobile'},
+      ).timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final tag = (data['tag_name'] as String? ?? '').replaceAll(RegExp(r'[^0-9.]'), '');
+      if (tag.isEmpty) return;
+
+      List<int> parseVer(String v) =>
+          v.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+      final latest  = parseVer(tag);
+      final current = parseVer(_appVersion);
+      bool isNewer = false;
+      for (int i = 0; i < latest.length && i < current.length; i++) {
+        if (latest[i] > current[i]) { isNewer = true; break; }
+        if (latest[i] < current[i]) break;
+      }
+      if (!isNewer || !mounted) return;
+
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Update Available'),
+          content: Text(
+            'Blue Sky Smog v$tag is available.\n'
+            'You are running v$_appVersion.\n\n'
+            'Download the new version to stay up to date.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Later'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                launchUrl(Uri.parse(_downloadUrl),
+                    mode: LaunchMode.externalApplication);
+              },
+              child: const Text('Download'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      // Silently ignore network errors
+    }
   }
 
   Future<void> _checkSession() async {
