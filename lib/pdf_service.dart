@@ -357,17 +357,11 @@ class PdfService {
         pw.SizedBox(height: 20),
         if (signatureBytes != null) ...[
           pw.Text('Customer Signature:', style: ts(9)),
-          pw.SizedBox(height: 4),
-          pw.Container(
-            height: 50,
-            width: double.infinity,
-            decoration: pw.BoxDecoration(
-                border: pw.Border(
-                    bottom: pw.BorderSide(color: black, width: 0.8))),
-            child: pw.Image(pw.MemoryImage(signatureBytes),
-                fit: pw.BoxFit.contain,
-                alignment: pw.Alignment.bottomLeft),
-          ),
+          pw.SizedBox(height: 6),
+          pw.Image(pw.MemoryImage(signatureBytes),
+              width: double.infinity, height: 90,
+              fit: pw.BoxFit.contain,
+              alignment: pw.Alignment.centerLeft),
         ] else ...[
           pw.Row(children: [
             pw.Text('Customer Signature:', style: ts(9)),

@@ -5,10 +5,10 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 /// ---------------------------------------------------------------------------
-/// LocalDb — single-file SQLite helper  (DB version 9)
+/// LocalDb — single-file SQLite helper  (DB version 10)
 /// ---------------------------------------------------------------------------
 /// Tables: customers · vehicles · services · settings · outbox · invoices ·
-///         invoice_items
+///         invoice_items · accounts
 /// ---------------------------------------------------------------------------
 
 class LocalDb {
@@ -24,7 +24,7 @@ class LocalDb {
 
   // ── Schema ────────────────────────────────────────────────────────────────
 
-  static const int _version = 9;
+  static const int _version = 10;
 
   Future<Database> _open() async {
     final path = join(await getDatabasesPath(), 'local.db');
@@ -138,6 +138,9 @@ class LocalDb {
         name             TEXT,
         qty              REAL NOT NULL DEFAULT 1,
         unit_price_cents INTEGER NOT NULL DEFAULT 0,
+        discount_cents   INTEGER NOT NULL DEFAULT 0,
+        result           TEXT NOT NULL DEFAULT '',
+        cert             TEXT NOT NULL DEFAULT '',
         odometer         TEXT,
         vin              TEXT,
         plate            TEXT,
@@ -147,6 +150,14 @@ class LocalDb {
         deleted          INTEGER NOT NULL DEFAULT 0,
         seq              INTEGER NOT NULL DEFAULT 0,
         event_id         TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE accounts (
+        customer_id   TEXT PRIMARY KEY,
+        balance_cents INTEGER NOT NULL DEFAULT 0,
+        updated_at    TEXT
       )
     ''');
   }
@@ -161,7 +172,7 @@ class LocalDb {
   Future<void> _ensureColumns(Database db) async {
     final invoiceCols = (await db.rawQuery("PRAGMA table_info(invoices)"))
         .map((r) => r['name'] as String).toSet();
-    for (final col in ['vin', 'plate', 'year', 'make', 'model', 'signature_path']) {
+    for (final col in ['vin', 'plate', 'year', 'make', 'model', 'signature_path', 'account_id']) {
       if (!invoiceCols.contains(col)) {
         await db.execute("ALTER TABLE invoices ADD COLUMN $col TEXT");
       }
@@ -180,6 +191,60 @@ class LocalDb {
         await db.execute("ALTER TABLE vehicles ADD COLUMN $col ${col == 'test_interval_days' ? 'INTEGER' : 'TEXT'}");
       }
     }
+    final itemCols = (await db.rawQuery("PRAGMA table_info(invoice_items)"))
+        .map((r) => r['name'] as String).toSet();
+    if (!itemCols.contains('discount_cents')) {
+      await db.execute(
+          "ALTER TABLE invoice_items ADD COLUMN discount_cents INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!itemCols.contains('result')) {
+      await db.execute(
+          "ALTER TABLE invoice_items ADD COLUMN result TEXT NOT NULL DEFAULT ''");
+    }
+    if (!itemCols.contains('cert')) {
+      await db.execute(
+          "ALTER TABLE invoice_items ADD COLUMN cert TEXT NOT NULL DEFAULT ''");
+    }
+    // Create accounts table if it doesn't exist (existing installs)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS accounts (
+        customer_id   TEXT PRIMARY KEY,
+        balance_cents INTEGER NOT NULL DEFAULT 0,
+        updated_at    TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS account_history (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id    TEXT NOT NULL,
+        entry_date     TEXT NOT NULL,
+        type           TEXT NOT NULL DEFAULT 'payment',
+        amount_cents   INTEGER NOT NULL DEFAULT 0,
+        note           TEXT NOT NULL DEFAULT '',
+        invoice_id     TEXT NOT NULL DEFAULT '',
+        payment_number TEXT NOT NULL DEFAULT '',
+        payment_id     TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+    // Add payment_id column to existing installs
+    final ahCols = (await db.rawQuery("PRAGMA table_info(account_history)"))
+        .map((r) => r['name'] as String).toSet();
+    if (!ahCols.contains('payment_id')) {
+      await db.execute(
+          "ALTER TABLE account_history ADD COLUMN payment_id TEXT NOT NULL DEFAULT ''");
+    }
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ah_payment_id "
+        "ON account_history(payment_id) WHERE payment_id != ''");
+    if (!ahCols.contains('partial_json')) {
+      await db.execute(
+          "ALTER TABLE account_history ADD COLUMN partial_json TEXT NOT NULL DEFAULT '{}'");
+    }
+    // Ensure accounts row exists for every customer
+    await db.execute('''
+      INSERT OR IGNORE INTO accounts (customer_id, balance_cents, updated_at)
+      SELECT customer_id, 0, datetime('now') FROM customers WHERE deleted=0
+    ''');
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -539,6 +604,220 @@ class LocalDb {
     );
   }
 
+  // ── Accounts ──────────────────────────────────────────────────────────────
+
+  /// All customers that have at least one account-charged invoice, with balance.
+  /// Account invoices are those with payment_method IN ('CHARGE','ACCOUNT').
+  Future<List<Map<String, dynamic>>> listAccountCustomers() async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT c.customer_id, c.name, c.first_name, c.last_name, c.company_name,
+             c.email, c.phone,
+             MAX(0,
+               COALESCE((SELECT SUM(amount_cents) FROM invoices
+                         WHERE customer_id = c.customer_id AND deleted = 0
+                           AND payment_method IN ('CHARGE','ACCOUNT')), 0)
+               - COALESCE((SELECT SUM(amount_cents) FROM account_history
+                           WHERE customer_id = c.customer_id AND type = 'payment'), 0)
+             ) AS balance_cents
+      FROM customers c
+      WHERE c.deleted = 0
+        AND EXISTS (
+          SELECT 1 FROM invoices
+          WHERE customer_id = c.customer_id AND deleted = 0
+            AND payment_method IN ('CHARGE','ACCOUNT')
+        )
+      ORDER BY COALESCE(NULLIF(c.company_name,''), NULLIF(c.first_name,''), c.name) ASC
+    ''');
+  }
+
+  /// Account balance for one customer — charge invoices minus payments.
+  Future<int> getAccountBalance(String customerId) async {
+    final db = await database;
+    final inv = await db.rawQuery(
+        "SELECT COALESCE(SUM(amount_cents),0) AS t FROM invoices "
+        "WHERE customer_id=? AND deleted=0 AND payment_method IN ('CHARGE','ACCOUNT')",
+        [customerId]);
+    final pay = await db.rawQuery(
+        "SELECT COALESCE(SUM(amount_cents),0) AS t FROM account_history "
+        "WHERE customer_id=? AND type='payment'",
+        [customerId]);
+    final invTotal = (inv.first['t'] as num?)?.toInt() ?? 0;
+    final payTotal = (pay.first['t'] as num?)?.toInt() ?? 0;
+    return (invTotal - payTotal).clamp(0, invTotal);
+  }
+
+  /// Account-charged invoices only (payment_method CHARGE or ACCOUNT), not deleted.
+  Future<List<Map<String, dynamic>>> getAccountInvoices(String customerId) async {
+    final db = await database;
+    return db.rawQuery(
+        "SELECT * FROM invoices WHERE customer_id=? AND deleted=0 "
+        "AND payment_method IN ('CHARGE','ACCOUNT') "
+        "ORDER BY invoice_date DESC, invoice_number DESC",
+        [customerId]);
+  }
+
+  /// Payment records from account_history for this customer (type='payment' only).
+  Future<List<Map<String, dynamic>>> getAccountPayments(String customerId) async {
+    final db = await database;
+    return db.query('account_history',
+        where: "customer_id = ? AND type = 'payment'",
+        whereArgs: [customerId],
+        orderBy: 'entry_date DESC, id DESC');
+  }
+
+  /// Auto-generate next PMT-XXXX number.
+  Future<String> getNextPaymentNumber() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        "SELECT MAX(CAST(REPLACE(payment_number,'PMT-','') AS INTEGER)) AS mx "
+        "FROM account_history WHERE payment_number LIKE 'PMT-%'");
+    final mx = rows.isEmpty ? 0 : (rows.first['mx'] as int? ?? 0);
+    return 'PMT-${(mx + 1).toString().padLeft(4, '0')}';
+  }
+
+  /// Compute unpaid invoices for [customerId] with effective remaining balance,
+  /// accounting for prior partial payments. Returns list oldest-first.
+  Future<List<Map<String, dynamic>>> getUnpaidInvoicesWithRemaining(
+      String customerId) async {
+    final db = await database;
+
+    // Collect fully-paid invoice UUIDs
+    final paidRows = await db.rawQuery(
+        "SELECT invoice_id FROM account_history "
+        "WHERE customer_id=? AND type='payment'",
+        [customerId]);
+    final paidIds = <String>{};
+    for (final r in paidRows) {
+      for (final uid in (r['invoice_id'] as String? ?? '').split(',')) {
+        final u = uid.trim();
+        if (u.isNotEmpty) paidIds.add(u);
+      }
+    }
+
+    // Accumulate prior partial amounts per invoice UUID
+    final partialApplied = <String, double>{};
+    final partialRows = await db.rawQuery(
+        "SELECT partial_json FROM account_history "
+        "WHERE customer_id=? AND type='payment'",
+        [customerId]);
+    for (final r in partialRows) {
+      try {
+        final pj = (r['partial_json'] as String? ?? '{}');
+        if (pj.isEmpty || pj == '{}') continue;
+        // parse simple JSON map manually to avoid extra dependencies
+        // format: {"uuid": amount, ...}
+        final stripped = pj.replaceAll('{', '').replaceAll('}', '').trim();
+        for (final pair in stripped.split(',')) {
+          final parts = pair.split(':');
+          if (parts.length != 2) continue;
+          final key = parts[0].trim().replaceAll('"', '');
+          final val = double.tryParse(parts[1].trim()) ?? 0.0;
+          if (key.isNotEmpty) {
+            partialApplied[key] = (partialApplied[key] ?? 0.0) + val;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Build unpaid list with effective remaining
+    final invRows = await db.rawQuery(
+        "SELECT invoice_id, invoice_number, amount_cents, invoice_date "
+        "FROM invoices WHERE customer_id=? AND deleted=0 "
+        "AND payment_method IN ('CHARGE','ACCOUNT') "
+        "ORDER BY invoice_date ASC, invoice_number ASC",
+        [customerId]);
+
+    final result = <Map<String, dynamic>>[];
+    for (final r in invRows) {
+      final uuid = (r['invoice_id'] as String? ?? '');
+      if (paidIds.contains(uuid)) continue;
+      final fullAmt  = ((r['amount_cents'] as int? ?? 0)) / 100.0;
+      final already  = partialApplied[uuid] ?? 0.0;
+      final remaining = (fullAmt - already).clamp(0.0, fullAmt);
+      if (remaining < 0.005) continue;
+      result.add({
+        'uuid':       uuid,
+        'num':        r['invoice_number'],
+        'full':       fullAmt,
+        'remaining':  remaining,
+        'wasPartial': already > 0.005,
+      });
+    }
+    return result;
+  }
+
+  /// Post a payment with auto-apply to oldest invoices. Returns a breakdown
+  /// map with keys: fullyPaid (List), partial (Map?), partialJsonStr (String).
+  Future<void> postPayment({
+    required String customerId,
+    required String deviceId,
+    required String entryDate,
+    required int amountCents,
+    required String note,
+    required List<String> invoiceIds,  // fully-covered invoice UUIDs
+    required String paymentNumber,
+    required String paymentId,         // UUID for cross-device dedup
+    String partialJson = '{}',         // partial tracking JSON
+  }) async {
+    final db  = await database;
+    final seq = DateTime.now().millisecondsSinceEpoch;
+    final custRows = await db.query('customers', columns: ['company_name'],
+        where: 'customer_id = ?', whereArgs: [customerId], limit: 1);
+    final companyName = custRows.isEmpty
+        ? '' : (custRows.first['company_name'] as String? ?? '');
+    final invoiceIdStr = invoiceIds.join(',');
+
+    await db.transaction((txn) async {
+      await txn.insert('account_history', {
+        'customer_id':    customerId,
+        'entry_date':     entryDate,
+        'type':           'payment',
+        'amount_cents':   amountCents,
+        'note':           note,
+        'invoice_id':     invoiceIdStr,
+        'payment_number': paymentNumber,
+        'payment_id':     paymentId,
+        'partial_json':   partialJson,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await _addOutboxEntry(txn,
+        deviceId: deviceId,
+        eventId:  paymentId,
+        seq:      seq,
+        entity:   'account_payment',
+        action:   'upsert',
+        payload: {
+          'payment_id':     paymentId,
+          'customer_id':    customerId,
+          'company_name':   companyName,
+          'entry_date':     entryDate,
+          'amount_cents':   amountCents,
+          'note':           note,
+          'invoice_id':     invoiceIdStr,
+          'payment_number': paymentNumber,
+          'partial_json':   partialJson,
+        },
+      );
+    });
+  }
+
+  /// Add [deltaCents] to a customer's account balance (creates row if absent).
+  Future<void> addToAccountBalance(String customerId, int deltaCents) async {
+    final db      = await database;
+    final current = await getAccountBalance(customerId);
+    final newBal  = current + deltaCents;
+    final now     = DateTime.now().toIso8601String();
+    await db.insert(
+      'accounts',
+      {
+        'customer_id':   customerId,
+        'balance_cents': newBal,
+        'updated_at':    now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
   // ── Invoices ──────────────────────────────────────────────────────────────
 
   /// Latest [limit] non-deleted invoices for a customer, newest first.
@@ -708,6 +987,7 @@ class LocalDb {
                 'year':           payload['year'] ?? '',
                 'make':           payload['make'] ?? '',
                 'model':          payload['model'] ?? '',
+                'account_id':     (payload['account_id'] ?? '').toString(),
                 'deleted':        0,
                 'seq':            seq,
                 'event_id':       eventId,
@@ -715,6 +995,42 @@ class LocalDb {
                 if (existingSigPath != null && existingSigPath.isNotEmpty)
                   'signature_path': existingSigPath,
               }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+              // Auto-create vehicle from invoice header if VIN/plate present
+              // (handles desktop-created invoices where vehicle event may not arrive)
+              final invVin    = (payload['vin']   ?? '').toString().trim();
+              final invPlate  = (payload['plate'] ?? '').toString().trim();
+              final invCustId = (payload['customer_id'] ?? '').toString().trim();
+              if ((invVin.isNotEmpty || invPlate.isNotEmpty) && invCustId.isNotEmpty) {
+                List<Map<String, dynamic>> existingV = [];
+                if (invVin.isNotEmpty) {
+                  existingV = await txn.query('vehicles',
+                    where: 'vin = ? AND customer_id = ? AND deleted = 0',
+                    whereArgs: [invVin, invCustId], limit: 1);
+                }
+                if (existingV.isEmpty && invPlate.isNotEmpty) {
+                  existingV = await txn.query('vehicles',
+                    where: 'plate = ? AND customer_id = ? AND deleted = 0',
+                    whereArgs: [invPlate, invCustId], limit: 1);
+                }
+                if (existingV.isEmpty) {
+                  await txn.insert('vehicles', {
+                    'vehicle_id':   const Uuid().v4(),
+                    'customer_id':  invCustId,
+                    'device_id':    deviceId,
+                    'vin':          invVin,
+                    'plate':        invPlate,
+                    'year':         (payload['year']  ?? '').toString(),
+                    'make':         (payload['make']  ?? '').toString(),
+                    'model':        (payload['model'] ?? '').toString(),
+                    'odometer':     '',
+                    'service_type': '',
+                    'deleted':      0,
+                    'seq':          seq,
+                    'event_id':     eventId,
+                  }, conflictAlgorithm: ConflictAlgorithm.ignore);
+                }
+              }
             } else if (action == 'delete') {
               await txn.update('invoices',
                 {'deleted': 1, 'seq': seq},
@@ -723,20 +1039,61 @@ class LocalDb {
             }
             break;
 
+          case 'service':
+            if (action == 'upsert') {
+              await txn.insert('services', {
+                'service_id':          payload['service_id'],
+                'name':                (payload['name'] ?? '').toString(),
+                'service_type':        (payload['service_type'] ?? '').toString(),
+                'default_price_cents': (payload['default_price_cents'] as int?)
+                    ?? (payload['price_cents'] as int?) ?? 0,
+                'sort_order':          (payload['sort_order'] as int?) ?? 0,
+                'deleted':             0,
+              }, conflictAlgorithm: ConflictAlgorithm.replace);
+            } else if (action == 'delete') {
+              await txn.update('services',
+                {'deleted': 1},
+                where: 'service_id = ?',
+                whereArgs: [payload['service_id']]);
+            }
+            break;
+
+          case 'setting':
+            if (action == 'upsert') {
+              final k = (payload['key'] ?? '').toString();
+              final v = (payload['value'] ?? '').toString();
+              if (k.isNotEmpty) {
+                await txn.insert('settings',
+                  {'key': k, 'value': v},
+                  conflictAlgorithm: ConflictAlgorithm.replace);
+              }
+            }
+            break;
+
           case 'invoice_item':
             if (action == 'upsert') {
+              // Resolve unit_price_cents: prefer explicit field, fall back to
+              // legacy 'price' field. Old events stored 'price' as amount_cents
+              // (the full invoice total in cents); new events always have unit_price_cents.
+              final rawUnitPrice = payload['unit_price_cents'] ?? payload['price'] ?? 0;
+              final resolvedUnitPriceCents = (rawUnitPrice is double)
+                  ? rawUnitPrice.round()
+                  : (rawUnitPrice as num).toInt();
               await txn.insert('invoice_items', {
                 'item_id':          payload['item_id'],
                 'invoice_id':       payload['invoice_id'],
                 'vehicle_id':       payload['vehicle_id'] ?? '',
-                'name':             payload['name'],
+                'name':             payload['name'] ?? payload['service'] ?? '',
                 'vin':              payload['vin'] ?? '',
                 'plate':            payload['plate'] ?? '',
                 'year':             payload['year'] ?? '',
                 'make':             payload['make'] ?? '',
                 'model':            payload['model'] ?? '',
                 'qty':              payload['qty'] ?? 1,
-                'unit_price_cents': payload['unit_price_cents'] ?? payload['price'] ?? 0,
+                'unit_price_cents': resolvedUnitPriceCents,
+                'discount_cents':   (payload['discount_cents'] as int?) ?? 0,
+                'result':           (payload['result'] ?? '').toString(),
+                'cert':             (payload['cert'] ?? '').toString(),
                 'odometer':         payload['odometer'] ?? '',
                 'deleted':          0,
                 'seq':              seq,
@@ -805,6 +1162,88 @@ class LocalDb {
               final iid = payload['invoice_id']?.toString() ?? '';
               if (iid.isNotEmpty) {
                 await _recalcInvoiceTotal(txn, iid, seq);
+              }
+            }
+            break;
+
+          case 'account_payment':
+            if (action == 'upsert') {
+              final paymentId = (payload['payment_id'] ?? '').toString();
+              if (paymentId.isEmpty) break;
+              // Dedup — skip if already have this payment
+              final existing = await txn.query('account_history',
+                  where: 'payment_id = ?', whereArgs: [paymentId], limit: 1);
+              if (existing.isNotEmpty) break;
+
+              // Resolve customer_id
+              var customerId = (payload['customer_id'] ?? '').toString();
+              if (customerId.isEmpty) {
+                // Try company_name lookup
+                final companyName = (payload['company_name'] ?? '').toString();
+                if (companyName.isNotEmpty) {
+                  final rows = await txn.query('customers', columns: ['customer_id'],
+                      where: 'UPPER(company_name) = UPPER(?)',
+                      whereArgs: [companyName], limit: 1);
+                  if (rows.isNotEmpty) customerId = rows.first['customer_id']?.toString() ?? '';
+                }
+              }
+              if (customerId.isEmpty) {
+                // Try resolving from referenced invoice UUIDs
+                for (final iid in (payload['invoice_id'] ?? '').toString().split(',')) {
+                  final trimmed = iid.trim();
+                  if (trimmed.isEmpty) continue;
+                  final rows = await txn.query('invoices', columns: ['customer_id'],
+                      where: 'invoice_id = ?', whereArgs: [trimmed], limit: 1);
+                  if (rows.isNotEmpty) {
+                    customerId = rows.first['customer_id']?.toString() ?? '';
+                    if (customerId.isNotEmpty) break;
+                  }
+                }
+              }
+              if (customerId.isEmpty) break;
+
+              final amountCents = (payload['amount_cents'] as num?)?.toInt() ?? 0;
+              await txn.insert('account_history', {
+                'customer_id':    customerId,
+                'entry_date':     (payload['entry_date'] ?? '').toString(),
+                'type':           'payment',
+                'amount_cents':   amountCents,
+                'note':           (payload['note'] ?? '').toString(),
+                'invoice_id':     (payload['invoice_id'] ?? '').toString(),
+                'payment_number': (payload['payment_number'] ?? '').toString(),
+                'payment_id':     paymentId,
+                'partial_json':   (payload['partial_json'] ?? '{}').toString(),
+              }, conflictAlgorithm: ConflictAlgorithm.ignore);
+
+            } else if (action == 'delete') {
+              final paymentId = (payload['payment_id'] ?? '').toString();
+              if (paymentId.isNotEmpty) {
+                await txn.delete('account_history',
+                    where: 'payment_id = ?', whereArgs: [paymentId]);
+              }
+            }
+            break;
+
+          case 'company_settings':
+            if (action == 'upsert') {
+              // Map desktop field names → mobile setting keys
+              final fieldMap = {
+                'co_name':        payload['co_name'],
+                'co_addr':        payload['co_addr'],
+                'co_city':        payload['co_city'],
+                'co_phone':       payload['co_phone'],
+                'co_email':       payload['co_email'],
+                'co_ard':         payload['co_ard'],
+                'invoice_notice': payload['invoice_notice'],
+              };
+              for (final entry in fieldMap.entries) {
+                if (entry.value != null) {
+                  await txn.insert(
+                    'settings',
+                    {'key': entry.key, 'value': entry.value.toString()},
+                    conflictAlgorithm: ConflictAlgorithm.replace,
+                  );
+                }
               }
             }
             break;
@@ -969,6 +1408,9 @@ class LocalDb {
     required String name,
     required double qty,
     required int    unitPriceCents,
+    int     discountCents = 0,
+    String  result = '',
+    String  cert   = '',
     String? vehicleId,
     String? odometer,
     String? vin,
@@ -982,21 +1424,24 @@ class LocalDb {
       await txn.insert(
         'invoice_items',
         {
-          'item_id':         itemId,
-          'invoice_id':      invoiceId,
-          'vehicle_id':      vehicleId,
-          'name':            name,
-          'qty':             qty,
+          'item_id':          itemId,
+          'invoice_id':       invoiceId,
+          'vehicle_id':       vehicleId,
+          'name':             name,
+          'qty':              qty,
           'unit_price_cents': unitPriceCents,
-          'odometer':        odometer,
-          'vin':             vin,
-          'plate':           plate,
-          'year':            year,
-          'make':            make,
-          'model':           model,
-          'deleted':         0,
-          'seq':             seq,
-          'event_id':        eventId,
+          'discount_cents':   discountCents,
+          'result':           result,
+          'cert':             cert,
+          'odometer':         odometer,
+          'vin':              vin,
+          'plate':            plate,
+          'year':             year,
+          'make':             make,
+          'model':            model,
+          'deleted':          0,
+          'seq':              seq,
+          'event_id':         eventId,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -1051,8 +1496,13 @@ class LocalDb {
           'invoice_id':       invoiceId,
           'vehicle_id':       vehicleId,
           'name':             name,
+          'service':          name,          // desktop reads 'service' first
           'qty':              qty,
           'unit_price_cents': unitPriceCents,
+          'discount_cents':   discountCents,
+          'discount':         discountCents / 100.0, // desktop reads 'discount' in dollars
+          'result':           result,
+          'cert':             cert,
           'odometer':         odometer,
           'vin':              vin,
           'plate':            plate,
@@ -1093,6 +1543,8 @@ class LocalDb {
 
   /// Lock an invoice: set status=PAID, finalized=1, record payment method,
   /// and queue an outbox event so the server mirrors the change.
+  /// If paymentMethod is CHARGE, the invoice amount is added to the customer's
+  /// account balance (accounts receivable).
   Future<void> finalizeInvoice({
     required String invoiceId,
     required String deviceId,
@@ -1101,14 +1553,15 @@ class LocalDb {
     required String paymentMethod,
   }) async {
     final db = await database;
-    await db.transaction((txn) async {
-      // Read current amount so the outbox payload is complete
-      final rows = await txn.query('invoices',
-          columns: ['amount_cents', 'customer_id', 'customer_name', 'invoice_date'],
-          where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
-      final row   = rows.isEmpty ? <String, Object?>{} : rows.first;
-      final cents = (row['amount_cents'] as int?) ?? 0;
+    // Read invoice data before the transaction for use after
+    final preRows = await db.query('invoices',
+        columns: ['amount_cents', 'customer_id', 'customer_name', 'invoice_date'],
+        where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
+    final preRow   = preRows.isEmpty ? <String, Object?>{} : preRows.first;
+    final cents    = (preRow['amount_cents'] as int?) ?? 0;
+    final custId   = (preRow['customer_id']?.toString() ?? '');
 
+    await db.transaction((txn) async {
       await txn.update(
         'invoices',
         {
@@ -1126,16 +1579,21 @@ class LocalDb {
         entity: 'invoice', action: 'upsert',
         payload: {
           'invoice_id':     invoiceId,
-          'customer_id':    row['customer_id'],
-          'customer_name':  row['customer_name'],
+          'customer_id':    preRow['customer_id'],
+          'customer_name':  preRow['customer_name'],
           'payment_method': paymentMethod,
-          'invoice_date':   row['invoice_date'],
+          'invoice_date':   preRow['invoice_date'],
           'status':         'PAID',
           'finalized':      1,
           'amount_cents':   cents,
         },
       );
     });
+
+    // If CHARGE payment, add invoice amount to customer's AR balance
+    if (paymentMethod.toUpperCase() == 'CHARGE' && cents > 0 && custId.isNotEmpty) {
+      await addToAccountBalance(custId, cents);
+    }
   }
 
   /// Mark an invoice's PDF as successfully uploaded to the server.
@@ -1239,15 +1697,16 @@ class LocalDb {
       DatabaseExecutor db, String invoiceId, int seq) async {
     final rows = await db.query(
       'invoice_items',
-      columns: ['qty', 'unit_price_cents'],
+      columns: ['qty', 'unit_price_cents', 'discount_cents'],
       where: 'invoice_id = ? AND deleted = 0',
       whereArgs: [invoiceId],
     );
     int total = 0;
     for (final r in rows) {
-      final qty   = (r['qty'] as num?)?.toDouble() ?? 1.0;
-      final cents = (r['unit_price_cents'] as int?) ?? 0;
-      total += (qty * cents).round();
+      final qty      = (r['qty'] as num?)?.toDouble() ?? 1.0;
+      final cents    = (r['unit_price_cents'] as int?) ?? 0;
+      final discount = (r['discount_cents'] as int?) ?? 0;
+      total += ((qty * cents).round() - discount).clamp(0, 999999999);
     }
     await db.update(
       'invoices',

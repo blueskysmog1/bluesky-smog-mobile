@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'account_page.dart';
 import 'vin_barcode_widget.dart';
 import 'package:printing/printing.dart';
 import 'package:uuid/uuid.dart';
@@ -33,6 +34,7 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
   Map<String, dynamic>? customer;
   List<Map<String, dynamic>> vehicles = [];
   List<Map<String, dynamic>> invoices = [];
+  int _balanceCents = 0;
 
   @override
   void initState() { super.initState(); _load(); }
@@ -41,8 +43,9 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
     final c = await db.getCustomer(widget.customerId);
     final v = await db.getVehicles(widget.customerId);
     final i = await db.latestInvoices(customerId: widget.customerId);
+    final bal = await db.getAccountBalance(widget.customerId);
     if (!mounted) return;
-    setState(() { customer = c; vehicles = v; invoices = i; });
+    setState(() { customer = c; vehicles = v; invoices = i; _balanceCents = bal; });
   }
 
   Future<void> _editCustomer() async {
@@ -245,6 +248,26 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
           IconButton(icon: const Icon(Icons.receipt_long_outlined),
               tooltip: 'New Invoice', onPressed: _newInvoice),
           IconButton(
+            icon: const Icon(Icons.account_balance_wallet_outlined),
+            tooltip: 'Account',
+            onPressed: () {
+              final c = customer;
+              if (c == null) return;
+              final co   = (c['company_name'] ?? '').toString().trim();
+              final fn   = (c['first_name']   ?? '').toString().trim();
+              final ln   = (c['last_name']    ?? '').toString().trim();
+              final name = co.isNotEmpty ? co : [fn, ln].where((s) => s.isNotEmpty).join(' ');
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => AccountDetailPage(
+                  customerId:  widget.customerId,
+                  displayName: name,
+                  email:       (c['email'] ?? '').toString(),
+                  deviceId:    widget.deviceId,
+                ),
+              )).then((_) => _load());
+            },
+          ),
+          IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.red),
               tooltip: 'Delete customer',
               onPressed: _deleteCustomer),
@@ -293,6 +316,67 @@ class _CustomerDetailPageState extends State<CustomerDetailPage> {
                   ]),
                 )),
                 const SizedBox(height: 16),
+
+                // ── Account Balance ──────────────────────────────────
+                if (_balanceCents != 0)
+                  Card(
+                    color: _balanceCents > 0
+                        ? Colors.orange.shade50
+                        : Colors.green.shade50,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      side: BorderSide(
+                        color: _balanceCents > 0
+                            ? Colors.orange.shade300
+                            : Colors.green.shade300,
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      child: Row(children: [
+                        Icon(
+                          _balanceCents > 0
+                              ? Icons.account_balance_wallet_outlined
+                              : Icons.check_circle_outline,
+                          color: _balanceCents > 0
+                              ? Colors.orange.shade700
+                              : Colors.green.shade700,
+                          size: 22,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _balanceCents > 0
+                                  ? 'Account Balance (Owed)'
+                                  : 'Account Credit',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                                color: _balanceCents > 0
+                                    ? Colors.orange.shade800
+                                    : Colors.green.shade800,
+                              ),
+                            ),
+                            Text(
+                              '\$${(_balanceCents.abs() / 100).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                                color: _balanceCents > 0
+                                    ? Colors.orange.shade800
+                                    : Colors.green.shade700,
+                              ),
+                            ),
+                          ],
+                        )),
+                      ]),
+                    ),
+                  ),
+                if (_balanceCents != 0) const SizedBox(height: 16),
 
                 // ── Vehicles ────────────────────────────────────────
                 Row(children: [

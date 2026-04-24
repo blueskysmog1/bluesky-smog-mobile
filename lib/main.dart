@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import 'account_page.dart';
 import 'api_service.dart';
 import 'login_page.dart';
 import 'local_db.dart';
@@ -124,6 +125,7 @@ class _CustomersPageState extends State<CustomersPage> {
   final db  = LocalDb.instance;
   ApiService get api => widget.api ?? _api;
   Timer? _timer;
+  final _scrollCtl = ScrollController();
 
   String _deviceId = 'UNKNOWN';
   int    _sinceSeq = 0;
@@ -140,7 +142,7 @@ class _CustomersPageState extends State<CustomersPage> {
   void initState() { super.initState(); _init(); }
 
   @override
-  void dispose() { _timer?.cancel(); super.dispose(); }
+  void dispose() { _timer?.cancel(); _scrollCtl.dispose(); super.dispose(); }
 
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -239,6 +241,12 @@ class _CustomersPageState extends State<CustomersPage> {
     }
   }
 
+  Future<void> _forceResyncNow() async {
+    // Reset seq in state (prefs already reset by settings page before calling this)
+    setState(() { _sinceSeq = 0; });
+    await _syncNow(showSnack: true);
+  }
+
   Future<void> _newCustomer() async {
     if (_subLocked) {
       showDialog(
@@ -304,6 +312,7 @@ class _CustomersPageState extends State<CustomersPage> {
             onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => SettingsPage(
                     onLogout: widget.onLogout,
+                    onForceResync: _forceResyncNow,
                   ))),
           ),
         ],
@@ -395,7 +404,13 @@ class _CustomersPageState extends State<CustomersPage> {
               ? Center(child: Text(_customers.isEmpty
                   ? 'No customers yet. Tap + to add one.'
                   : 'No results for "$_search"'))
-              : ListView.separated(
+              : Scrollbar(
+                  controller: _scrollCtl,
+                  thumbVisibility: true,
+                  thickness: 4,
+                  radius: const Radius.circular(4),
+                  child: ListView.separated(
+                  controller: _scrollCtl,
                   itemCount: filtered.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (context, i) {
@@ -428,7 +443,7 @@ class _CustomersPageState extends State<CustomersPage> {
                       },
                     );
                   },
-                ),
+                )),
         ),
       ]),
     );
