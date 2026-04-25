@@ -1,10 +1,13 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'master_dashboard_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
 import 'local_db.dart';
 import 'reports_page.dart';
 
@@ -263,6 +266,58 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _manageSubscription() async {
+    final prefs   = await SharedPreferences.getInstance();
+    final apiBase = 'https://api.blueskysmog.net';
+    final token   = prefs.getString('auth_token') ?? '';
+    final uname   = prefs.getString('username') ?? '';
+    final pass    = prefs.getString('password') ?? '';
+
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token.isNotEmpty) {
+      headers['x-token'] = token;
+    } else {
+      headers['x-username'] = uname;
+      headers['x-password'] = pass;
+    }
+
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBase/v1/subscription/portal'),
+        headers: headers,
+      ).timeout(const Duration(seconds: 15));
+
+      if (!mounted) return;
+
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final portalUrl = (body['portal_url'] as String?) ?? '';
+        if (portalUrl.isNotEmpty) {
+          final uri = Uri.parse(portalUrl);
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Could not open billing portal URL.')));
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No portal URL returned from server.')));
+        }
+      } else {
+        final body = jsonDecode(res.body) as Map<String, dynamic>? ?? {};
+        final detail = (body['detail'] as String?) ?? res.reasonPhrase ?? 'Unknown error';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Manage Subscription error: $detail')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Manage Subscription error: $e')));
+      }
+    }
+  }
+
   Widget _coField(TextEditingController ctl, String label, IconData icon,
       {TextInputType keyboard = TextInputType.text}) =>
       TextField(
@@ -513,6 +568,22 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 4),
               Text('Use if payments or invoices are missing on this device.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+
+              const SizedBox(height: 16),
+              // ── Manage Subscription ────────────────────────────────
+              ElevatedButton.icon(
+                onPressed: _manageSubscription,
+                icon: const Icon(Icons.credit_card_outlined, size: 18),
+                label: const Text('Manage Subscription'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0D9488),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 44),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text('Update payment method, cancel, or view billing history.',
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
 
               const SizedBox(height: 24),

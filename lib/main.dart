@@ -15,7 +15,7 @@ import 'customer_detail_page.dart';
 import 'settings_page.dart';
 import 'vehicles_due_page.dart';
 
-const String _appVersion = '1.2.3';
+const String _appVersion = '1.2.4';
 const String _updateApiUrl =
     'https://api.github.com/repos/blueskysmog1/bluesky-smog-mobile/releases/latest';
 const String _downloadUrl =
