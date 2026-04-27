@@ -157,7 +157,7 @@ class _LoginPageState extends State<LoginPage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Active subscription required',
+                        'Blue Sky Smog Invoice Manager',
                         style: TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 12,
@@ -165,9 +165,9 @@ class _LoginPageState extends State<LoginPage>
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Blue Sky Mobile requires an active Blue Sky subscription '
-                        '(\$40/month). Your login credentials are provided when '
-                        'you subscribe.',
+                        'Sign in with an existing account, or tap '
+                        '"Create Account" to get started with a free trial. '
+                        'A \$40/month subscription is required to continue.',
                         style: TextStyle(
                             fontSize: 11, color: Colors.blue.shade700),
                       ),
@@ -176,7 +176,7 @@ class _LoginPageState extends State<LoginPage>
                         onTap: () => launchUrl(Uri.parse(_subscribeUrl),
                             mode: LaunchMode.externalApplication),
                         child: Text(
-                          'Subscribe or learn more →',
+                          'Learn more at blueskysmog.net →',
                           style: TextStyle(
                               fontSize: 11,
                               color: Colors.blue.shade800,
@@ -195,7 +195,7 @@ class _LoginPageState extends State<LoginPage>
           // Tab bar
           TabBar(
             controller: _tabs,
-            tabs: const [Tab(text: 'Sign In'), Tab(text: 'Register Device')],
+            tabs: const [Tab(text: 'Sign In'), Tab(text: 'Create Account')],
           ),
 
           // Error banner
@@ -231,7 +231,7 @@ class _LoginPageState extends State<LoginPage>
     padding: const EdgeInsets.all(24),
     child: Form(key: _loginFormKey, child: Column(children: [
       Text(
-        'Sign in with the credentials provided with your Blue Sky subscription.',
+        'Sign in to your Blue Sky account. New? Use the Create Account tab.',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
       ),
@@ -287,36 +287,38 @@ class _LoginPageState extends State<LoginPage>
       Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.amber.shade50,
-          border: Border.all(color: Colors.amber.shade300),
+          color: Colors.green.shade50,
+          border: Border.all(color: Colors.green.shade300),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Icon(Icons.warning_amber_outlined,
-                size: 15, color: Colors.amber.shade800),
+            Icon(Icons.check_circle_outline,
+                size: 15, color: Colors.green.shade800),
             const SizedBox(width: 6),
-            Text('Existing subscribers only',
+            Text('Free trial included',
                 style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
-                    color: Colors.amber.shade900)),
+                    color: Colors.green.shade900)),
           ]),
           const SizedBox(height: 4),
           Text(
-            'Use this only to register an additional device under your '
-            'existing Blue Sky account. New customers must subscribe first.',
-            style: TextStyle(fontSize: 11, color: Colors.amber.shade900),
+            'Create a new Blue Sky account to get started. A \$40/month '
+            'subscription is required to continue after your trial. '
+            'You can also use this to add an additional device to an '
+            'existing account.',
+            style: TextStyle(fontSize: 11, color: Colors.green.shade900),
           ),
           const SizedBox(height: 6),
           GestureDetector(
             onTap: () => launchUrl(Uri.parse(_subscribeUrl),
                 mode: LaunchMode.externalApplication),
             child: Text(
-              'New customer? Subscribe at $_subscribeUrl →',
+              'Learn more at blueskysmog.net →',
               style: TextStyle(
                   fontSize: 11,
-                  color: Colors.amber.shade900,
+                  color: Colors.green.shade900,
                   fontWeight: FontWeight.w600,
                   decoration: TextDecoration.underline),
             ),

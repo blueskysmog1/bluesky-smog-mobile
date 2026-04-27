@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -28,7 +27,6 @@ class _SettingsPageState extends State<SettingsPage>
   List<Map<String, dynamic>> _services = [];
   bool _loading = true;
   bool _isMaster = false;
-  Timer? _refreshTimer;
 
   // Company info controllers
   final _coNameCtl    = TextEditingController();
@@ -47,10 +45,6 @@ class _SettingsPageState extends State<SettingsPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
-    // Silently refresh company info every 10 s so synced data appears automatically
-    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      if (mounted && !_coInfoSaving) _refreshCompanyInfo();
-    });
   }
 
   @override
@@ -87,7 +81,6 @@ class _SettingsPageState extends State<SettingsPage>
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
