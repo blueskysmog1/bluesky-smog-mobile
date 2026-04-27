@@ -227,19 +227,19 @@ class PdfService {
       }
     }
 
-    // ── Barcode value (matches desktop: VIN/plate/year/make/model/invNum) ─
-    String barcodeValue = [hdrVin, hdrPlate, hdrYear, hdrMake, hdrModel, numStr]
-        .join('|');
-    if (barcodeValue.replaceAll('|', '').trim().isEmpty) {
-      barcodeValue = 'INV$numStr-$invoiceDate';
-    }
+    // ── Barcode value — VIN only for maximum scannability ─────────────
+    // Using only the VIN (≤17 chars) keeps bars wide enough for handheld
+    // scanners. Fall back to invoice number when no VIN is present.
+    final String barcodeValue = hdrVin.trim().isNotEmpty
+        ? hdrVin.trim()
+        : 'INV$numStr';
 
     // ── Build PDF ─────────────────────────────────────────────────────
     final pdf = pw.Document();
 
     pdf.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.letter,
-      margin: const pw.EdgeInsets.fromLTRB(40, 36, 40, 60),
+      margin: const pw.EdgeInsets.fromLTRB(40, 36, 40, 72),
       footer: (context) => pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
@@ -350,7 +350,7 @@ class PdfService {
         // ── Notice — shown on ALL documents (matches desktop) ───────
         if (noticeText.trim().isNotEmpty) ...[
           pw.SizedBox(height: 8),
-          pw.Text(noticeText, style: ts(5.5, color: grey)),
+          pw.Text(noticeText, style: ts(8, color: grey)),
         ],
 
         // ── Customer signature — shown on ALL documents (matches desktop) ─
@@ -395,8 +395,9 @@ class PdfService {
         barcode: pw.Barcode.code128(),
         data: data,
         width: double.infinity,
-        height: 30,
-        drawText: false,
+        height: 48,
+        drawText: true,
+        textStyle: pw.TextStyle(fontSize: 7),
       );
     } catch (_) {
       return pw.SizedBox();
