@@ -172,7 +172,8 @@ class LocalDb {
   Future<void> _ensureColumns(Database db) async {
     final invoiceCols = (await db.rawQuery("PRAGMA table_info(invoices)"))
         .map((r) => r['name'] as String).toSet();
-    for (final col in ['vin', 'plate', 'year', 'make', 'model', 'signature_path', 'account_id']) {
+    for (final col in ['vin', 'plate', 'year', 'make', 'model', 'signature_path',
+                        'account_id', 'po_number', 'owner_first', 'owner_last']) {
       if (!invoiceCols.contains(col)) {
         await db.execute("ALTER TABLE invoices ADD COLUMN $col TEXT");
       }
@@ -183,6 +184,14 @@ class LocalDb {
       if (!customerCols.contains(col)) {
         await db.execute("ALTER TABLE customers ADD COLUMN $col TEXT");
       }
+    }
+    if (!customerCols.contains('discount_percent')) {
+      await db.execute(
+          "ALTER TABLE customers ADD COLUMN discount_percent REAL NOT NULL DEFAULT 0.0");
+    }
+    if (!customerCols.contains('discount_type')) {
+      await db.execute(
+          "ALTER TABLE customers ADD COLUMN discount_type TEXT NOT NULL DEFAULT 'PERCENT'");
     }
     final vehicleCols = (await db.rawQuery("PRAGMA table_info(vehicles)"))
         .map((r) => r['name'] as String).toSet();
@@ -342,6 +351,8 @@ class LocalDb {
     String?  city,
     String?  state,
     String?  zip,
+    double   discountPercent = 0.0,
+    String   discountType   = 'PERCENT',
     required String eventId,
     required int    seq,
   }) async {
@@ -351,21 +362,23 @@ class LocalDb {
       await txn.insert(
         'customers',
         {
-          'customer_id':   customerId,
-          'device_id':     deviceId,
-          'name':          fullName,
-          'first_name':    firstName,
-          'last_name':     lastName,
-          'company_name':  companyName,
-          'phone':         phone,
-          'email':         email,
-          'address':       address,
-          'city':          city,
-          'state':         state,
-          'zip':           zip,
-          'deleted':       0,
-          'seq':           seq,
-          'event_id':      eventId,
+          'customer_id':     customerId,
+          'device_id':       deviceId,
+          'name':            fullName,
+          'first_name':      firstName,
+          'last_name':       lastName,
+          'company_name':    companyName,
+          'phone':           phone,
+          'email':           email,
+          'address':         address,
+          'city':            city,
+          'state':           state,
+          'zip':             zip,
+          'discount_percent': discountPercent,
+          'discount_type':    discountType,
+          'deleted':         0,
+          'seq':             seq,
+          'event_id':        eventId,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -373,17 +386,19 @@ class LocalDb {
         deviceId: deviceId, eventId: eventId, seq: seq,
         entity: 'customer', action: 'upsert',
         payload: {
-          'customer_id':   customerId,
-          'first_name':    firstName,
-          'last_name':     lastName,
-          'name':          fullName,
-          'company_name':  companyName,
-          'phone':         phone,
-          'email':         email,
-          'address':       address,
-          'city':          city,
-          'state':         state,
-          'zip':           zip,
+          'customer_id':     customerId,
+          'first_name':      firstName,
+          'last_name':       lastName,
+          'name':            fullName,
+          'company_name':    companyName,
+          'phone':           phone,
+          'email':           email,
+          'address':         address,
+          'city':            city,
+          'state':           state,
+          'zip':             zip,
+          'discount_percent': discountPercent,
+          'discount_type':    discountType,
         },
       );
     });
@@ -894,21 +909,23 @@ class LocalDb {
           case 'customer':
             if (action == 'upsert') {
               await txn.insert('customers', {
-                'customer_id':   payload['customer_id'],
-                'device_id':     deviceId,
-                'name':          payload['name'] ?? '',
-                'first_name':    payload['first_name'] ?? '',
-                'last_name':     payload['last_name'] ?? '',
-                'company_name':  payload['company_name'],
-                'phone':         payload['phone'],
-                'email':         payload['email'],
-                'address':       payload['address'],
-                'city':          payload['city'],
-                'state':         payload['state'],
-                'zip':           payload['zip'],
-                'deleted':       0,
-                'seq':           seq,
-                'event_id':      eventId,
+                'customer_id':     payload['customer_id'],
+                'device_id':       deviceId,
+                'name':            payload['name'] ?? '',
+                'first_name':      payload['first_name'] ?? '',
+                'last_name':       payload['last_name'] ?? '',
+                'company_name':    payload['company_name'],
+                'phone':           payload['phone'],
+                'email':           payload['email'],
+                'address':         payload['address'],
+                'city':            payload['city'],
+                'state':           payload['state'],
+                'zip':             payload['zip'],
+                'discount_percent': (payload['discount_percent'] as num?)?.toDouble() ?? 0.0,
+                'discount_type':    (payload['discount_type'] ?? 'PERCENT').toString(),
+                'deleted':         0,
+                'seq':             seq,
+                'event_id':        eventId,
               }, conflictAlgorithm: ConflictAlgorithm.replace);
             } else if (action == 'delete') {
               await txn.update('customers',
@@ -988,6 +1005,9 @@ class LocalDb {
                 'make':           payload['make'] ?? '',
                 'model':          payload['model'] ?? '',
                 'account_id':     (payload['account_id'] ?? '').toString(),
+                'po_number':      (payload['po_number']   ?? '').toString(),
+                'owner_first':    (payload['owner_first'] ?? '').toString(),
+                'owner_last':     (payload['owner_last']  ?? '').toString(),
                 'deleted':        0,
                 'seq':            seq,
                 'event_id':       eventId,
@@ -1228,13 +1248,15 @@ class LocalDb {
             if (action == 'upsert') {
               // Map desktop field names → mobile setting keys
               final fieldMap = {
-                'co_name':        payload['co_name'],
-                'co_addr':        payload['co_addr'],
-                'co_city':        payload['co_city'],
-                'co_phone':       payload['co_phone'],
-                'co_email':       payload['co_email'],
-                'co_ard':         payload['co_ard'],
-                'invoice_notice': payload['invoice_notice'],
+                'co_name':              payload['co_name'],
+                'co_addr':              payload['co_addr'],
+                'co_city':              payload['co_city'],
+                'co_phone':             payload['co_phone'],
+                'co_email':             payload['co_email'],
+                'co_ard':               payload['co_ard'],
+                'invoice_notice':       payload['invoice_notice'],
+                'card_surcharge_value': payload['card_surcharge_value'],
+                'card_surcharge_type':  payload['card_surcharge_type'],
               };
               for (final entry in fieldMap.entries) {
                 if (entry.value != null) {
@@ -1268,6 +1290,60 @@ class LocalDb {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// Return all open (non-finalized, non-deleted) estimates ordered by date.
+  Future<List<Map<String, dynamic>>> getOpenEstimates() async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT invoice_id, invoice_number, invoice_date, customer_name,
+             amount_cents, status, payment_method
+      FROM invoices
+      WHERE deleted = 0 AND finalized = 0
+      ORDER BY invoice_date DESC, invoice_number DESC
+    ''');
+  }
+
+  /// Return by-service revenue summary for a date range (finalized invoices only).
+  Future<List<Map<String, dynamic>>> getByServiceReport(
+      String startDate, String endDate) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT
+        ii.name AS service_name,
+        COUNT(*)                                               AS count,
+        COALESCE(SUM(ii.unit_price_cents - ii.discount_cents), 0) AS total_cents
+      FROM invoice_items ii
+      JOIN invoices inv ON ii.invoice_id = inv.invoice_id
+      WHERE inv.deleted = 0
+        AND inv.finalized = 1
+        AND inv.status != 'ESTIMATE'
+        AND inv.invoice_date >= ?
+        AND inv.invoice_date <= ?
+        AND ii.deleted = 0
+      GROUP BY ii.name
+      ORDER BY total_cents DESC
+    ''', [startDate, endDate]);
+  }
+
+  /// Return by-payment-type revenue summary for a date range.
+  Future<List<Map<String, dynamic>>> getByPaymentReport(
+      String startDate, String endDate) async {
+    final db = await database;
+    return db.rawQuery('''
+      SELECT
+        COALESCE(NULLIF(payment_method,''), 'OTHER') AS method,
+        COUNT(*)                                     AS count,
+        COALESCE(SUM(amount_cents), 0)               AS total_cents
+      FROM invoices
+      WHERE deleted = 0
+        AND finalized = 1
+        AND status != 'ESTIMATE'
+        AND invoice_date >= ?
+        AND invoice_date <= ?
+      GROUP BY method
+      ORDER BY total_cents DESC
+    ''', [startDate, endDate]);
+  }
+
   /// Create a brand-new invoice row and enqueue an outbox event.
   Future<void> createInvoiceAndEnqueueUpsert({
     required String invoiceId,
@@ -1285,6 +1361,9 @@ class LocalDb {
     String? year,
     String? make,
     String? model,
+    String? poNumber,
+    String? ownerFirst,
+    String? ownerLast,
   }) async {
     final db = await database;
     await db.transaction((txn) async {
@@ -1305,11 +1384,14 @@ class LocalDb {
           'deleted':        0,
           'seq':            seq,
           'event_id':       eventId,
-          if (vin   != null) 'vin':   vin,
-          if (plate != null) 'plate': plate,
-          if (year  != null) 'year':  year,
-          if (make  != null) 'make':  make,
-          if (model != null) 'model': model,
+          if (vin        != null) 'vin':         vin,
+          if (plate      != null) 'plate':       plate,
+          if (year       != null) 'year':        year,
+          if (make       != null) 'make':        make,
+          if (model      != null) 'model':       model,
+          if (poNumber   != null) 'po_number':   poNumber,
+          if (ownerFirst != null) 'owner_first': ownerFirst,
+          if (ownerLast  != null) 'owner_last':  ownerLast,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -1331,6 +1413,9 @@ class LocalDb {
           'year':           year,
           'make':           make,
           'model':          model,
+          'po_number':      poNumber,
+          'owner_first':    ownerFirst,
+          'owner_last':     ownerLast,
         },
       );
     });
@@ -1348,6 +1433,9 @@ class LocalDb {
     required String invoiceDate,
     required String eventId,
     required int    seq,
+    String? poNumber,
+    String? ownerFirst,
+    String? ownerLast,
   }) async {
     final db = await database;
     await db.transaction((txn) async {
@@ -1362,6 +1450,9 @@ class LocalDb {
           'notes':          notes,
           'seq':            seq,
           'event_id':       eventId,
+          'po_number':      poNumber,
+          'owner_first':    ownerFirst,
+          'owner_last':     ownerLast,
         },
         where: 'invoice_id = ?',
         whereArgs: [invoiceId],
@@ -1371,7 +1462,7 @@ class LocalDb {
           columns: ['amount_cents'],
           where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
       final cents = rows.isEmpty ? 0 : (rows.first['amount_cents'] as int? ?? 0);
-      // Fetch vehicle fields from the invoice row so they sync correctly
+      // Fetch vehicle/extra fields from the invoice row so they sync correctly
       final invRow2 = await txn.query('invoices',
           where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
       final iv2 = invRow2.isEmpty ? <String,Object?>{} : invRow2.first;
@@ -1388,11 +1479,14 @@ class LocalDb {
           'notes':          notes,
           'amount_cents':   cents,
           'finalized':      0,
-          'vin':   iv2['vin']   ?? '',
-          'plate': iv2['plate'] ?? '',
-          'year':  iv2['year']  ?? '',
-          'make':  iv2['make']  ?? '',
-          'model': iv2['model'] ?? '',
+          'vin':         iv2['vin']         ?? '',
+          'plate':       iv2['plate']       ?? '',
+          'year':        iv2['year']        ?? '',
+          'make':        iv2['make']        ?? '',
+          'model':       iv2['model']       ?? '',
+          'po_number':   poNumber   ?? iv2['po_number']   ?? '',
+          'owner_first': ownerFirst ?? iv2['owner_first'] ?? '',
+          'owner_last':  ownerLast  ?? iv2['owner_last']  ?? '',
         },
       );
     });

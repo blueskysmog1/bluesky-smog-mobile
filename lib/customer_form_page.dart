@@ -25,6 +25,8 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
   final _cityCtl     = TextEditingController();
   final _stateCtl    = TextEditingController();
   final _zipCtl      = TextEditingController();
+  final _discountCtl = TextEditingController();
+  String _discountType = 'PERCENT'; // 'PERCENT' or 'FLAT'
   bool _zipLoading   = false;
   bool _loading      = true, _saving = false;
   bool get _isEdit   => widget.customerId != null;
@@ -51,6 +53,7 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
     _firstCtl.dispose(); _lastCtl.dispose(); _companyCtl.dispose();
     _phoneCtl.dispose(); _emailCtl.dispose(); _addressCtl.dispose();
     _cityCtl.dispose(); _stateCtl.dispose(); _zipCtl.dispose();
+    _discountCtl.dispose();
     super.dispose();
   }
 
@@ -71,13 +74,16 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
           _firstCtl.text = parts.first;
           _lastCtl.text  = parts.length > 1 ? parts.sublist(1).join(' ') : '';
         }
-        _companyCtl.text = (c['company_name'] ?? '').toString();
-        _phoneCtl.text   = (c['phone']        ?? '').toString();
-        _emailCtl.text   = (c['email']        ?? '').toString();
-        _addressCtl.text = (c['address']      ?? '').toString();
-        _cityCtl.text    = (c['city']         ?? '').toString();
-        _stateCtl.text   = (c['state']        ?? '').toString();
-        _zipCtl.text     = (c['zip']          ?? '').toString();
+        _companyCtl.text  = (c['company_name']   ?? '').toString();
+        _phoneCtl.text    = (c['phone']          ?? '').toString();
+        _emailCtl.text    = (c['email']          ?? '').toString();
+        _addressCtl.text  = (c['address']        ?? '').toString();
+        _cityCtl.text     = (c['city']           ?? '').toString();
+        _stateCtl.text    = (c['state']          ?? '').toString();
+        _zipCtl.text      = (c['zip']            ?? '').toString();
+        final disc = (c['discount_percent'] as num?)?.toDouble() ?? 0.0;
+        _discountCtl.text = disc > 0 ? disc.toString() : '';
+        _discountType = (c['discount_type'] ?? 'PERCENT').toString();
       }
     }
     if (mounted) setState(() => _loading = false);
@@ -209,19 +215,21 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
     try {
       final customerId = widget.customerId ?? const Uuid().v4();
       await db.upsertCustomer(
-        customerId:  customerId,
-        deviceId:    widget.deviceId,
-        firstName:   _t(_firstCtl),
-        lastName:    _t(_lastCtl),
-        companyName: _n(_companyCtl),
-        phone:       _fmtPhone(_phoneCtl.text),
-        email:       _n(_emailCtl),
-        address:     _n(_addressCtl),
-        city:        _n(_cityCtl),
-        state:       _n(_stateCtl),
-        zip:         _n(_zipCtl),
-        eventId:     const Uuid().v4(),
-        seq:         DateTime.now().millisecondsSinceEpoch,
+        customerId:      customerId,
+        deviceId:        widget.deviceId,
+        firstName:       _t(_firstCtl),
+        lastName:        _t(_lastCtl),
+        companyName:     _n(_companyCtl),
+        phone:           _fmtPhone(_phoneCtl.text),
+        email:           _n(_emailCtl),
+        address:         _n(_addressCtl),
+        city:            _n(_cityCtl),
+        state:           _n(_stateCtl),
+        zip:             _n(_zipCtl),
+        discountPercent: double.tryParse(_discountCtl.text.trim()) ?? 0.0,
+        discountType:    _discountType,
+        eventId:         const Uuid().v4(),
+        seq:             DateTime.now().millisecondsSinceEpoch,
       );
       if (mounted) Navigator.of(context).pop(_isEdit ? true : customerId);
     } catch (e) {
@@ -235,13 +243,26 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
   Widget _field(TextEditingController ctl, String label,
       {IconData? icon, TextInputType? keyboard,
        String? Function(String?)? validator, int maxLines = 1,
-       void Function(String)? onChanged}) {
+       void Function(String)? onChanged, bool upper = true}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: TextFormField(
         controller: ctl, keyboardType: keyboard, maxLines: maxLines,
-        textCapitalization: TextCapitalization.words,
-        onChanged: onChanged,
+        textCapitalization: upper
+            ? TextCapitalization.characters
+            : TextCapitalization.none,
+        onChanged: upper
+            ? (v) {
+                final up = v.toUpperCase();
+                if (v != up) {
+                  ctl.value = TextEditingValue(
+                    text: up,
+                    selection: TextSelection.collapsed(offset: up.length),
+                  );
+                }
+                onChanged?.call(up);
+              }
+            : onChanged,
         decoration: InputDecoration(labelText: label,
             border: const OutlineInputBorder(),
             prefixIcon: icon != null ? Icon(icon) : null),
@@ -293,7 +314,12 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
                     children: [
                       Expanded(child: TextFormField(
                         controller: _firstCtl,
-                        textCapitalization: TextCapitalization.words,
+                        textCapitalization: TextCapitalization.characters,
+                        onChanged: (v) {
+                          final up = v.toUpperCase();
+                          if (v != up) _firstCtl.value = TextEditingValue(
+                              text: up, selection: TextSelection.collapsed(offset: up.length));
+                        },
                         decoration: const InputDecoration(
                           labelText: 'First Name',
                           border: OutlineInputBorder(),
@@ -304,7 +330,12 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
                       const SizedBox(width: 10),
                       Expanded(child: TextFormField(
                         controller: _lastCtl,
-                        textCapitalization: TextCapitalization.words,
+                        textCapitalization: TextCapitalization.characters,
+                        onChanged: (v) {
+                          final up = v.toUpperCase();
+                          if (v != up) _lastCtl.value = TextEditingValue(
+                              text: up, selection: TextSelection.collapsed(offset: up.length));
+                        },
                         decoration: const InputDecoration(
                           labelText: 'Last Name',
                           border: OutlineInputBorder(),
@@ -430,6 +461,56 @@ class _CustomerFormPageState extends State<CustomerFormPage> {
                       ),
                       onChanged: (v) { if (v.length == 5) _lookupZip(v); },
                     )),
+                  ]),
+                ),
+
+                // Discount — value + type toggle
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    // Value input
+                    Expanded(
+                      child: TextFormField(
+                        controller: _discountCtl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        textCapitalization: TextCapitalization.none,
+                        decoration: InputDecoration(
+                          labelText: _discountType == 'FLAT'
+                              ? 'Discount \$' : 'Discount %',
+                          border: const OutlineInputBorder(),
+                          prefixIcon: Icon(_discountType == 'FLAT'
+                              ? Icons.attach_money_outlined
+                              : Icons.percent_outlined),
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) return null;
+                          if (double.tryParse(v.trim()) == null) return 'Enter a number';
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Type toggle: % / $
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(height: 4),
+                        SegmentedButton<String>(
+                          segments: const [
+                            ButtonSegment(value: 'PERCENT', label: Text('%')),
+                            ButtonSegment(value: 'FLAT',    label: Text('\$')),
+                          ],
+                          selected: {_discountType},
+                          onSelectionChanged: (s) =>
+                              setState(() => _discountType = s.first),
+                          style: ButtonStyle(
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ],
+                    ),
                   ]),
                 ),
 
