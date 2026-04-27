@@ -19,50 +19,29 @@ class InvoiceFormPage extends StatefulWidget {
 
 class _InvoiceFormPageState extends State<InvoiceFormPage> {
   final db = LocalDb.instance;
-  final _formKey      = GlobalKey<FormState>();
-  final _notesCtl     = TextEditingController();
-  final _poCtl        = TextEditingController();
-  final _ownerFirstCtl = TextEditingController();
-  final _ownerLastCtl  = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
 
+  // Hidden state preserved on edit (not shown in UI)
   String _paymentMethod = '';
   String _status        = 'ESTIMATE';
-  DateTime _invoiceDate = DateTime.now();
   String? _customerId;
   String  _customerName = '';
   List<Map<String, dynamic>> _vehicles = [];
+  DateTime _invoiceDate = DateTime.now();
   bool _loading = true, _saving = false;
   bool get _isEdit => widget.invoiceId != null;
 
-  static const _paymentMethods = [
-    'CASH', 'CARD', 'VISA', 'MASTERCARD', 'AMEX', 'DISCOVER',
-    'CHECK', 'CHARGE', 'OTHER',
-  ];
-  static const _cardMethods = {'CARD', 'VISA', 'MASTERCARD', 'AMEX', 'DISCOVER'};
-  static const _statuses = ['ESTIMATE'];
-
   @override
   void initState() { super.initState(); _load(); }
-
-  @override
-  void dispose() {
-    _notesCtl.dispose(); _poCtl.dispose();
-    _ownerFirstCtl.dispose(); _ownerLastCtl.dispose();
-    super.dispose();
-  }
 
   Future<void> _load() async {
     if (_isEdit) {
       final inv = await db.getInvoice(widget.invoiceId!);
       if (inv != null && mounted) {
-        _customerId   = (inv['customer_id']    ?? '').toString();
-        _customerName = (inv['customer_name']  ?? '').toString();
-        _paymentMethod = (inv['payment_method'] ?? 'CASH').toString();
+        _customerId    = (inv['customer_id']    ?? '').toString();
+        _customerName  = (inv['customer_name']  ?? '').toString();
+        _paymentMethod = (inv['payment_method'] ?? '').toString();
         _status        = (inv['status']         ?? 'ESTIMATE').toString();
-        _notesCtl.text      = (inv['notes']       ?? '').toString();
-        _poCtl.text         = (inv['po_number']   ?? '').toString();
-        _ownerFirstCtl.text = (inv['owner_first'] ?? '').toString();
-        _ownerLastCtl.text  = (inv['owner_last']  ?? '').toString();
         final ds = (inv['invoice_date'] ?? '').toString();
         if (ds.isNotEmpty) _invoiceDate = DateTime.tryParse(ds) ?? DateTime.now();
         if (_customerId != null && _customerId!.isNotEmpty)
@@ -102,36 +81,30 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
     try {
       final seq     = DateTime.now().millisecondsSinceEpoch;
       final eventId = const Uuid().v4();
-      final notes      = _notesCtl.text.trim().isEmpty ? null : _notesCtl.text.trim();
-      final poNumber   = _poCtl.text.trim().isEmpty ? null : _poCtl.text.trim().toUpperCase();
-      final ownerFirst = _ownerFirstCtl.text.trim().isEmpty ? null : _ownerFirstCtl.text.trim().toUpperCase();
-      final ownerLast  = _ownerLastCtl.text.trim().isEmpty ? null : _ownerLastCtl.text.trim().toUpperCase();
       if (_isEdit) {
         await db.updateInvoiceAndEnqueueUpsert(
           invoiceId: widget.invoiceId!, deviceId: widget.deviceId,
           customerId: _customerId!, customerName: _customerName,
           paymentMethod: _paymentMethod, status: _status,
-          notes: notes, invoiceDate: _formattedDate, eventId: eventId, seq: seq,
-          poNumber: poNumber, ownerFirst: ownerFirst, ownerLast: ownerLast,
+          invoiceDate: _formattedDate, eventId: eventId, seq: seq,
+          // notes and poNumber are null → preserved from existing DB values
         );
         await widget.scheduleSync?.call();
         if (mounted) Navigator.of(context).pop(true);
       } else {
         final newId = const Uuid().v4();
-        // Look up first vehicle for this customer to include in the invoice header
-        final vehs = await db.getVehicles(_customerId!);
-        final veh  = vehs.isNotEmpty ? vehs.first : null;
+        final vehs  = await db.getVehicles(_customerId!);
+        final veh   = vehs.isNotEmpty ? vehs.first : null;
         await db.createInvoiceAndEnqueueUpsert(
           invoiceId: newId, deviceId: widget.deviceId,
           customerId: _customerId!, customerName: _customerName,
-          paymentMethod: _paymentMethod, status: _status,
-          notes: notes, invoiceDate: _formattedDate, eventId: eventId, seq: seq,
+          paymentMethod: '', status: _status,
+          invoiceDate: _formattedDate, eventId: eventId, seq: seq,
           vin:   veh?['vin']?.toString(),
           plate: veh?['plate']?.toString(),
           year:  veh?['year']?.toString(),
           make:  veh?['make']?.toString(),
           model: veh?['model']?.toString(),
-          poNumber: poNumber, ownerFirst: ownerFirst, ownerLast: ownerLast,
         );
         await widget.scheduleSync?.call();
         if (mounted) Navigator.of(context).pop(newId);
@@ -163,7 +136,7 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
           : Form(
               key: _formKey,
               child: ListView(padding: const EdgeInsets.all(16), children: [
-                // Customer display or picker
+                // Customer display (edit) or picker (new)
                 if (_customerId != null && _customerId!.isNotEmpty)
                   Card(child: ListTile(
                     leading: const Icon(Icons.person_outline),
@@ -182,128 +155,18 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
                 InkWell(
                   onTap: _pickDate,
                   child: InputDecorator(
-                    decoration: const InputDecoration(labelText: 'Invoice Date',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.calendar_today_outlined)),
+                    decoration: const InputDecoration(
+                      labelText: 'Invoice Date',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.calendar_today_outlined),
+                    ),
                     child: Text(_formattedDate),
                   ),
                 ),
                 const SizedBox(height: 16),
 
-                // Payment method
-                DropdownButtonFormField<String>(
-                  value: _paymentMethod.isEmpty ? null : _paymentMethod,
-                  decoration: const InputDecoration(
-                    labelText: 'Payment Method',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.payment_outlined),
-                  ),
-                  hint: const Text('Select payment method'),
-                  items: _paymentMethods
-                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                      .toList(),
-                  onChanged: (v) => setState(() => _paymentMethod = v ?? ''),
-                ),
-                if (_paymentMethod == 'CHARGE') ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue.shade200),
-                    ),
-                    child: Row(children: [
-                      Icon(Icons.account_balance_wallet_outlined,
-                          size: 16, color: Colors.blue.shade700),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(
-                        'This invoice will be charged to the customer\'s account balance.',
-                        style: TextStyle(fontSize: 12, color: Colors.blue.shade800),
-                      )),
-                    ]),
-                  ),
-                ],
-                const SizedBox(height: 16),
-
-                // PO Number
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _poCtl,
-                  textCapitalization: TextCapitalization.characters,
-                  onChanged: (v) {
-                    final up = v.toUpperCase();
-                    if (v != up) {
-                      _poCtl.value = TextEditingValue(
-                        text: up,
-                        selection: TextSelection.collapsed(offset: up.length),
-                      );
-                    }
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'PO Number (optional)',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.tag_outlined),
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Owner First / Last
-                Row(children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _ownerFirstCtl,
-                      textCapitalization: TextCapitalization.characters,
-                      onChanged: (v) {
-                        final up = v.toUpperCase();
-                        if (v != up) {
-                          _ownerFirstCtl.value = TextEditingValue(
-                            text: up,
-                            selection: TextSelection.collapsed(offset: up.length),
-                          );
-                        }
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Owner First (optional)',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _ownerLastCtl,
-                      textCapitalization: TextCapitalization.characters,
-                      onChanged: (v) {
-                        final up = v.toUpperCase();
-                        if (v != up) {
-                          _ownerLastCtl.value = TextEditingValue(
-                            text: up,
-                            selection: TextSelection.collapsed(offset: up.length),
-                          );
-                        }
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Owner Last (optional)',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 16),
-
-                // Notes
-                TextFormField(
-                  controller: _notesCtl, maxLines: 3,
-                  decoration: const InputDecoration(labelText: 'Notes (optional)',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.notes_outlined),
-                      alignLabelWithHint: true),
-                ),
-
                 // Vehicles summary
                 if (_vehicles.isNotEmpty) ...[
-                  const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
@@ -313,7 +176,7 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
                       const Text('Customer Vehicles',
                           style: TextStyle(fontWeight: FontWeight.w600)),
                       const SizedBox(height: 4),
-                      const Text('Assign service lines to vehicles on the invoice detail page.',
+                      const Text('Add service lines on the invoice detail page.',
                           style: TextStyle(fontSize: 12, color: Colors.grey)),
                       const SizedBox(height: 8),
                       ..._vehicles.map((v) {
@@ -338,9 +201,9 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
                       }),
                     ]),
                   ),
+                  const SizedBox(height: 16),
                 ],
 
-                const SizedBox(height: 32),
                 SizedBox(height: 48, child: ElevatedButton.icon(
                   onPressed: _saving ? null : _save,
                   icon: const Icon(Icons.check),

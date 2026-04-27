@@ -47,10 +47,12 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
   final _odometerCtl    = TextEditingController();
   final _certCtl        = TextEditingController();
   final _notesCtl       = TextEditingController();
+  final _poCtl          = TextEditingController();
   bool _useCustomService = false;
 
   bool _finalizing = false;
   bool _downloadingPdf = false;
+  bool _editFieldsInitialized = false;  // populate notes/PO# only on first load
   String? _signaturePath;   // path to saved signature PNG
 
   bool get _isFinalized =>
@@ -63,7 +65,7 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
   void dispose() {
     _customNameCtl.dispose(); _qtyCtl.dispose(); _priceCtl.dispose();
     _discountCtl.dispose(); _odometerCtl.dispose(); _certCtl.dispose();
-    _notesCtl.dispose();
+    _notesCtl.dispose(); _poCtl.dispose();
     super.dispose();
   }
 
@@ -81,6 +83,12 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
       }
     }
     final sigPath = inv?['signature_path'] as String?;
+    // Populate editable fields only on first load (don't clobber unsaved edits)
+    if (inv != null && !_editFieldsInitialized) {
+      _notesCtl.text          = (inv['notes']     ?? '').toString();
+      _poCtl.text             = (inv['po_number'] ?? '').toString();
+      _editFieldsInitialized  = true;
+    }
     if (!mounted) return;
     setState(() {
       invoice             = inv;
@@ -207,11 +215,12 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     await widget.scheduleSync?.call();
   }
 
-  // ── Save notes ────────────────────────────────────────────────────
-  Future<void> _saveNotes() async {
+  // ── Save notes + PO# ─────────────────────────────────────────────
+  Future<void> _saveDetails() async {
     final inv = invoice;
     if (inv == null) return;
-    final notes = _notesCtl.text.trim().isEmpty ? null : _notesCtl.text.trim();
+    final notes    = _notesCtl.text.trim().isEmpty ? null : _notesCtl.text.trim();
+    final poNumber = _poCtl.text.trim().isEmpty    ? null : _poCtl.text.trim().toUpperCase();
     final seq     = DateTime.now().millisecondsSinceEpoch;
     final eventId = const Uuid().v4();
     await db.updateInvoiceAndEnqueueUpsert(
@@ -222,13 +231,14 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
       paymentMethod: (inv['payment_method'] ?? '').toString(),
       status:        (inv['status'] ?? 'ESTIMATE').toString(),
       notes:         notes,
+      poNumber:      poNumber,
       invoiceDate:   (inv['invoice_date'] ?? '').toString(),
       eventId:       eventId,
       seq:           seq,
     );
     await widget.scheduleSync?.call();
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Notes saved'), duration: Duration(seconds: 1)));
+        const SnackBar(content: Text('Saved'), duration: Duration(seconds: 1)));
   }
 
   // ── Finalize ──────────────────────────────────────────────────────
@@ -772,6 +782,32 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                     // ── Service lines ─────────────────────────
                     ..._itemsInline(),
                     const SizedBox(height: 8),
+                    // ── PO Number ────────────────────────────
+                    TextField(
+                      controller: _poCtl,
+                      readOnly: _isFinalized,
+                      textCapitalization: TextCapitalization.characters,
+                      onChanged: (v) {
+                        final up = v.toUpperCase();
+                        if (v != up) {
+                          _poCtl.value = TextEditingValue(
+                            text: up,
+                            selection: TextSelection.collapsed(offset: up.length),
+                          );
+                        }
+                      },
+                      decoration: InputDecoration(
+                        labelText: 'PO Number (optional)',
+                        border: const OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.tag_outlined),
+                        suffixIcon: _isFinalized ? null : IconButton(
+                          icon: const Icon(Icons.save_outlined),
+                          tooltip: 'Save PO#',
+                          onPressed: _saveDetails,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     // ── Notes field ───────────────────────────
                     TextField(
                       controller: _notesCtl,
@@ -785,7 +821,7 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                         suffixIcon: _isFinalized ? null : IconButton(
                           icon: const Icon(Icons.save_outlined),
                           tooltip: 'Save notes',
-                          onPressed: _saveNotes,
+                          onPressed: _saveDetails,
                         ),
                       ),
                     ),

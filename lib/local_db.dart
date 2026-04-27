@@ -1361,9 +1361,6 @@ class LocalDb {
     String? year,
     String? make,
     String? model,
-    String? poNumber,
-    String? ownerFirst,
-    String? ownerLast,
   }) async {
     final db = await database;
     await db.transaction((txn) async {
@@ -1384,14 +1381,11 @@ class LocalDb {
           'deleted':        0,
           'seq':            seq,
           'event_id':       eventId,
-          if (vin        != null) 'vin':         vin,
-          if (plate      != null) 'plate':       plate,
-          if (year       != null) 'year':        year,
-          if (make       != null) 'make':        make,
-          if (model      != null) 'model':       model,
-          if (poNumber   != null) 'po_number':   poNumber,
-          if (ownerFirst != null) 'owner_first': ownerFirst,
-          if (ownerLast  != null) 'owner_last':  ownerLast,
+          if (vin   != null) 'vin':   vin,
+          if (plate != null) 'plate': plate,
+          if (year  != null) 'year':  year,
+          if (make  != null) 'make':  make,
+          if (model != null) 'model': model,
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -1408,14 +1402,11 @@ class LocalDb {
           'notes':          notes,
           'amount_cents':   0,
           'finalized':      0,
-          'vin':            vin,
-          'plate':          plate,
-          'year':           year,
-          'make':           make,
-          'model':          model,
-          'po_number':      poNumber,
-          'owner_first':    ownerFirst,
-          'owner_last':     ownerLast,
+          'vin':   vin,
+          'plate': plate,
+          'year':  year,
+          'make':  make,
+          'model': model,
         },
       );
     });
@@ -1429,16 +1420,22 @@ class LocalDb {
     required String customerName,
     required String paymentMethod,
     required String status,
-    String?  notes,
+    String?  notes,    // null = preserve existing
     required String invoiceDate,
     required String eventId,
     required int    seq,
-    String? poNumber,
-    String? ownerFirst,
-    String? ownerLast,
+    String? poNumber,  // null = preserve existing
   }) async {
     final db = await database;
     await db.transaction((txn) async {
+      // Read existing row first so we can preserve fields not being updated
+      final existing = await txn.query('invoices',
+          where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
+      final iv = existing.isEmpty ? <String, Object?>{} : existing.first;
+
+      final resolvedNotes    = notes    ?? iv['notes'];
+      final resolvedPoNumber = poNumber ?? iv['po_number'];
+
       await txn.update(
         'invoices',
         {
@@ -1447,25 +1444,15 @@ class LocalDb {
           'payment_method': paymentMethod,
           'invoice_date':   invoiceDate,
           'status':         status,
-          'notes':          notes,
+          'notes':          resolvedNotes,
+          'po_number':      resolvedPoNumber,
           'seq':            seq,
           'event_id':       eventId,
-          'po_number':      poNumber,
-          'owner_first':    ownerFirst,
-          'owner_last':     ownerLast,
         },
         where: 'invoice_id = ?',
         whereArgs: [invoiceId],
       );
-      // Fetch current amount to include in outbox payload
-      final rows = await txn.query('invoices',
-          columns: ['amount_cents'],
-          where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
-      final cents = rows.isEmpty ? 0 : (rows.first['amount_cents'] as int? ?? 0);
-      // Fetch vehicle/extra fields from the invoice row so they sync correctly
-      final invRow2 = await txn.query('invoices',
-          where: 'invoice_id = ?', whereArgs: [invoiceId], limit: 1);
-      final iv2 = invRow2.isEmpty ? <String,Object?>{} : invRow2.first;
+      final cents = (iv['amount_cents'] as int?) ?? 0;
       await _addOutboxEntry(txn,
         deviceId: deviceId, eventId: eventId, seq: seq,
         entity: 'invoice', action: 'upsert',
@@ -1476,17 +1463,15 @@ class LocalDb {
           'payment_method': paymentMethod,
           'invoice_date':   invoiceDate,
           'status':         status,
-          'notes':          notes,
+          'notes':          resolvedNotes,
+          'po_number':      resolvedPoNumber ?? '',
           'amount_cents':   cents,
           'finalized':      0,
-          'vin':         iv2['vin']         ?? '',
-          'plate':       iv2['plate']       ?? '',
-          'year':        iv2['year']        ?? '',
-          'make':        iv2['make']        ?? '',
-          'model':       iv2['model']       ?? '',
-          'po_number':   poNumber   ?? iv2['po_number']   ?? '',
-          'owner_first': ownerFirst ?? iv2['owner_first'] ?? '',
-          'owner_last':  ownerLast  ?? iv2['owner_last']  ?? '',
+          'vin':   iv['vin']   ?? '',
+          'plate': iv['plate'] ?? '',
+          'year':  iv['year']  ?? '',
+          'make':  iv['make']  ?? '',
+          'model': iv['model'] ?? '',
         },
       );
     });
