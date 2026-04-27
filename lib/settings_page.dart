@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -20,12 +21,14 @@ class SettingsPage extends StatefulWidget {
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class _SettingsPageState extends State<SettingsPage>
+    with WidgetsBindingObserver {
   final db = LocalDb.instance;
   String? _logoPath;
   List<Map<String, dynamic>> _services = [];
   bool _loading = true;
   bool _isMaster = false;
+  Timer? _refreshTimer;
 
   // Company info controllers
   final _coNameCtl    = TextEditingController();
@@ -40,7 +43,54 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _coInfoSaving  = false;
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _load();
+    // Silently refresh company info every 10 s so synced data appears automatically
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted && !_coInfoSaving) _refreshCompanyInfo();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Reload company info when app comes back to foreground
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  /// Lightweight refresh: re-reads only the company info keys from the DB
+  /// and updates controllers whose values have changed (without touching
+  /// fields the user is actively editing).
+  Future<void> _refreshCompanyInfo() async {
+    final coName  = await db.getSetting('co_name')         ?? '';
+    final coAddr  = await db.getSetting('co_addr')         ?? '';
+    final coCity  = await db.getSetting('co_city')         ?? '';
+    final coPhone = await db.getSetting('co_phone')        ?? '';
+    final coEmail = await db.getSetting('co_email')        ?? '';
+    final coArd   = await db.getSetting('co_ard')          ?? '';
+    final notice  = await db.getSetting('invoice_notice')  ?? '';
+    if (!mounted) return;
+    // Only update a controller if its text differs from the DB value
+    // (avoids clobbering in-progress edits)
+    void _sync(TextEditingController ctl, String val) {
+      if (ctl.text != val) ctl.text = val;
+    }
+    _sync(_coNameCtl,  coName);
+    _sync(_coAddrCtl,  coAddr);
+    _sync(_coCityCtl,  coCity);
+    _sync(_coPhoneCtl, coPhone);
+    _sync(_coEmailCtl, coEmail);
+    _sync(_coArdCtl,   coArd);
+    _sync(_noticeCtl,  notice);
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   Future<void> _load() async {
     final logo   = await db.getSetting('logo_path');
@@ -266,6 +316,74 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// Safely extracts a human-readable error string from a FastAPI response body.
+  /// `detail` may be a plain String or a List of validation-error objects.
+  String _parseDetail(dynamic body, String fallback) {
+    if (body == null) return fallback;
+    final raw = (body as Map<String, dynamic>?)?['detail'];
+    if (raw == null) return fallback;
+    if (raw is String) return raw;
+    if (raw is List) {
+      return raw.map((e) {
+        if (e is Map) return (e['msg'] ?? e.toString()).toString();
+        return e.toString();
+      }).join(', ');
+    }
+    return fallback;
+  }
+
+  Future<void> _subscribe() async {
+    final prefs   = await SharedPreferences.getInstance();
+    final apiBase = 'https://api.blueskysmog.net';
+    final token   = prefs.getString('auth_token') ?? '';
+    final uname   = prefs.getString('username') ?? '';
+    final pass    = prefs.getString('password') ?? '';
+
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token.isNotEmpty) {
+      headers['x-token'] = token;
+    } else {
+      headers['x-username'] = uname;
+      headers['x-password'] = pass;
+    }
+
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBase/v1/subscription/checkout'),
+        headers: headers,
+      ).timeout(const Duration(seconds: 15));
+
+      if (!mounted) return;
+
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final checkoutUrl = (body['checkout_url'] as String?) ?? '';
+        if (checkoutUrl.isNotEmpty) {
+          final uri = Uri.parse(checkoutUrl);
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Could not open checkout URL.')));
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No checkout URL returned from server.')));
+        }
+      } else {
+        final body = jsonDecode(res.body);
+        final detail = _parseDetail(body, res.reasonPhrase ?? 'Unknown error');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Subscribe error: $detail')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Subscribe error: $e')));
+      }
+    }
+  }
+
   Future<void> _manageSubscription() async {
     final prefs   = await SharedPreferences.getInstance();
     final apiBase = 'https://api.blueskysmog.net';
@@ -305,8 +423,8 @@ class _SettingsPageState extends State<SettingsPage> {
             const SnackBar(content: Text('No portal URL returned from server.')));
         }
       } else {
-        final body = jsonDecode(res.body) as Map<String, dynamic>? ?? {};
-        final detail = (body['detail'] as String?) ?? res.reasonPhrase ?? 'Unknown error';
+        final body = jsonDecode(res.body);
+        final detail = _parseDetail(body, res.reasonPhrase ?? 'Unknown error');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Manage Subscription error: $detail')));
       }
@@ -360,7 +478,9 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(padding: const EdgeInsets.all(16), children: [
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(padding: const EdgeInsets.all(16), children: [
 
               // ── Logo section ───────────────────────────────────────
               const Text('Company Logo',
@@ -571,13 +691,28 @@ class _SettingsPageState extends State<SettingsPage> {
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
 
               const SizedBox(height: 16),
+              // ── Subscribe ──────────────────────────────────────────
+              ElevatedButton.icon(
+                onPressed: _subscribe,
+                icon: const Icon(Icons.star_outline, size: 18),
+                label: const Text('Subscribe - \$40/month'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0D9488),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 44),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text('Start your subscription — flat rate, no per-invoice fees.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+              const SizedBox(height: 10),
               // ── Manage Subscription ────────────────────────────────
               ElevatedButton.icon(
                 onPressed: _manageSubscription,
                 icon: const Icon(Icons.credit_card_outlined, size: 18),
                 label: const Text('Manage Subscription'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF0D9488),
+                  backgroundColor: const Color(0xFF1E3A5F),
                   foregroundColor: Colors.white,
                   minimumSize: const Size(double.infinity, 44),
                 ),
@@ -680,6 +815,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   },
                 ),
             ]),
+          ),
     );
   }
 }

@@ -452,7 +452,7 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
       final remoteEvents = (pullRes['events'] as List?) ?? [];
       final newMax = await db.applyRemoteEvents(
           deviceId: widget.deviceId, events: remoteEvents);
-      await prefs.setInt('since_seq', newMax);
+      if (newMax > sinceSeq) await prefs.setInt('since_seq', newMax);
       await _load(); // now has invoice_number
 
       // 4. Generate PDF with the real invoice number

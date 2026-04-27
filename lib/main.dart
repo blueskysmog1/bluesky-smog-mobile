@@ -279,9 +279,12 @@ class _CustomersPageState extends State<CustomersPage> {
       final newMax  = await db.applyRemoteEvents(deviceId: _deviceId, events: events);
       pulled = events.length;
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('since_seq', newMax);
-      _sinceSeq = newMax;
+      // Only advance since_seq — never regress to 0 on an empty pull
+      if (newMax > _sinceSeq) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('since_seq', newMax);
+        _sinceSeq = newMax;
+      }
 
       await _refreshCustomers();
       final msg = 'Sync ok — pushed $pushed, pulled $pulled';
