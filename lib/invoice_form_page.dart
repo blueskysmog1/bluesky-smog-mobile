@@ -19,8 +19,11 @@ class InvoiceFormPage extends StatefulWidget {
 
 class _InvoiceFormPageState extends State<InvoiceFormPage> {
   final db = LocalDb.instance;
-  final _formKey  = GlobalKey<FormState>();
-  final _notesCtl = TextEditingController();
+  final _formKey      = GlobalKey<FormState>();
+  final _notesCtl     = TextEditingController();
+  final _poCtl        = TextEditingController();
+  final _ownerFirstCtl = TextEditingController();
+  final _ownerLastCtl  = TextEditingController();
 
   String _paymentMethod = '';
   String _status        = 'ESTIMATE';
@@ -42,7 +45,11 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
   void initState() { super.initState(); _load(); }
 
   @override
-  void dispose() { _notesCtl.dispose(); super.dispose(); }
+  void dispose() {
+    _notesCtl.dispose(); _poCtl.dispose();
+    _ownerFirstCtl.dispose(); _ownerLastCtl.dispose();
+    super.dispose();
+  }
 
   Future<void> _load() async {
     if (_isEdit) {
@@ -52,7 +59,10 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
         _customerName = (inv['customer_name']  ?? '').toString();
         _paymentMethod = (inv['payment_method'] ?? 'CASH').toString();
         _status        = (inv['status']         ?? 'ESTIMATE').toString();
-        _notesCtl.text = (inv['notes']          ?? '').toString();
+        _notesCtl.text      = (inv['notes']       ?? '').toString();
+        _poCtl.text         = (inv['po_number']   ?? '').toString();
+        _ownerFirstCtl.text = (inv['owner_first'] ?? '').toString();
+        _ownerLastCtl.text  = (inv['owner_last']  ?? '').toString();
         final ds = (inv['invoice_date'] ?? '').toString();
         if (ds.isNotEmpty) _invoiceDate = DateTime.tryParse(ds) ?? DateTime.now();
         if (_customerId != null && _customerId!.isNotEmpty)
@@ -92,13 +102,17 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
     try {
       final seq     = DateTime.now().millisecondsSinceEpoch;
       final eventId = const Uuid().v4();
-      final notes   = _notesCtl.text.trim().isEmpty ? null : _notesCtl.text.trim();
+      final notes      = _notesCtl.text.trim().isEmpty ? null : _notesCtl.text.trim();
+      final poNumber   = _poCtl.text.trim().isEmpty ? null : _poCtl.text.trim().toUpperCase();
+      final ownerFirst = _ownerFirstCtl.text.trim().isEmpty ? null : _ownerFirstCtl.text.trim().toUpperCase();
+      final ownerLast  = _ownerLastCtl.text.trim().isEmpty ? null : _ownerLastCtl.text.trim().toUpperCase();
       if (_isEdit) {
         await db.updateInvoiceAndEnqueueUpsert(
           invoiceId: widget.invoiceId!, deviceId: widget.deviceId,
           customerId: _customerId!, customerName: _customerName,
           paymentMethod: _paymentMethod, status: _status,
           notes: notes, invoiceDate: _formattedDate, eventId: eventId, seq: seq,
+          poNumber: poNumber, ownerFirst: ownerFirst, ownerLast: ownerLast,
         );
         await widget.scheduleSync?.call();
         if (mounted) Navigator.of(context).pop(true);
@@ -117,6 +131,7 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
           year:  veh?['year']?.toString(),
           make:  veh?['make']?.toString(),
           model: veh?['model']?.toString(),
+          poNumber: poNumber, ownerFirst: ownerFirst, ownerLast: ownerLast,
         );
         await widget.scheduleSync?.call();
         if (mounted) Navigator.of(context).pop(newId);
@@ -209,6 +224,72 @@ class _InvoiceFormPageState extends State<InvoiceFormPage> {
                     ]),
                   ),
                 ],
+                const SizedBox(height: 16),
+
+                // PO Number
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _poCtl,
+                  textCapitalization: TextCapitalization.characters,
+                  onChanged: (v) {
+                    final up = v.toUpperCase();
+                    if (v != up) {
+                      _poCtl.value = TextEditingValue(
+                        text: up,
+                        selection: TextSelection.collapsed(offset: up.length),
+                      );
+                    }
+                  },
+                  decoration: const InputDecoration(
+                    labelText: 'PO Number (optional)',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.tag_outlined),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Owner First / Last
+                Row(children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _ownerFirstCtl,
+                      textCapitalization: TextCapitalization.characters,
+                      onChanged: (v) {
+                        final up = v.toUpperCase();
+                        if (v != up) {
+                          _ownerFirstCtl.value = TextEditingValue(
+                            text: up,
+                            selection: TextSelection.collapsed(offset: up.length),
+                          );
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Owner First (optional)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _ownerLastCtl,
+                      textCapitalization: TextCapitalization.characters,
+                      onChanged: (v) {
+                        final up = v.toUpperCase();
+                        if (v != up) {
+                          _ownerLastCtl.value = TextEditingValue(
+                            text: up,
+                            selection: TextSelection.collapsed(offset: up.length),
+                          );
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Owner Last (optional)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ]),
                 const SizedBox(height: 16),
 
                 // Notes

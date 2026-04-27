@@ -21,13 +21,15 @@ class _ReportsPageState extends State<ReportsPage>
   _ReportData? _weekData;
   _ReportData? _monthData;
   List<Map<String, dynamic>> _balances = [];
+  List<Map<String, dynamic>> _serviceReport = [];
+  List<Map<String, dynamic>> _openEstimates = [];
 
   bool _loading = false;
 
   @override
   void initState() {
     super.initState();
-    _tabCtl = TabController(length: 4, vsync: this);
+    _tabCtl = TabController(length: 6, vsync: this);
     _tabCtl.addListener(() => setState(() {}));
     _load();
   }
@@ -74,8 +76,11 @@ class _ReportsPageState extends State<ReportsPage>
       final m = await _loadReport(_fmt(mFirst), _fmt(mLast));
       final allAccts = await db.listAccountCustomers();
       final bal = allAccts.where((r) => ((r['balance_cents'] as int?) ?? 0) > 0).toList();
+      final svc = await db.getByServiceReport(_fmt(mFirst), _fmt(mLast));
+      final est = await db.getOpenEstimates();
       if (mounted) setState(() {
         _dayData = d; _weekData = w; _monthData = m; _balances = bal;
+        _serviceReport = svc; _openEstimates = est;
       });
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -157,9 +162,12 @@ class _ReportsPageState extends State<ReportsPage>
     switch (_tabCtl.index) {
       case 0:  return _dayData;
       case 1:  return _weekData;
-      default: return _monthData;
+      case 2:  return _monthData;
+      default: return null;
     }
   }
+
+  bool get _isSalesTab => _tabCtl.index <= 2;
 
   String get _currentPeriodLabel {
     switch (_tabCtl.index) {
@@ -315,30 +323,35 @@ class _ReportsPageState extends State<ReportsPage>
         title: const Text('Sales Reports'),
         bottom: TabBar(
           controller: _tabCtl,
+          isScrollable: true,
           tabs: const [
             Tab(text: 'Daily'),
             Tab(text: 'Weekly'),
             Tab(text: 'Monthly'),
+            Tab(text: 'By Service'),
+            Tab(text: 'Estimates'),
             Tab(text: 'Balances'),
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.email_outlined),
-            tooltip: 'Email Report',
-            onPressed: _loading ? null : _sendEmail,
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: TextButton.icon(
-              onPressed: _pickDate,
-              icon: const Icon(Icons.calendar_today, size: 18),
-              label: Text(
-                '${_selectedDate.month}/${_selectedDate.day}/${_selectedDate.year}',
-                style: const TextStyle(fontSize: 13),
+          if (_isSalesTab) ...[
+            IconButton(
+              icon: const Icon(Icons.email_outlined),
+              tooltip: 'Email Report',
+              onPressed: _loading ? null : _sendEmail,
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton.icon(
+                onPressed: _pickDate,
+                icon: const Icon(Icons.calendar_today, size: 18),
+                label: Text(
+                  '${_selectedDate.month}/${_selectedDate.day}/${_selectedDate.year}',
+                  style: const TextStyle(fontSize: 13),
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ),
       body: _loading
@@ -349,6 +362,8 @@ class _ReportsPageState extends State<ReportsPage>
                 _buildDayTab(),
                 _buildWeekTab(),
                 _buildMonthTab(),
+                _buildByServiceTab(),
+                _buildEstimatesTab(),
                 _buildBalancesTab(),
               ],
             ),
@@ -432,6 +447,173 @@ class _ReportsPageState extends State<ReportsPage>
         const SizedBox(height: 6),
         ...data.invoices.map((inv) => _InvoiceTile(inv: inv)),
       ],
+    ]);
+  }
+
+  // ── By Service tab ────────────────────────────────────────────────────────
+
+  Widget _buildByServiceTab() {
+    final mFirst = DateTime(_selectedDate.year, _selectedDate.month, 1);
+    final mLast  = DateTime(_selectedDate.year, _selectedDate.month + 1, 0);
+    final label  = '${_monthName(_selectedDate.month)} ${_selectedDate.year}';
+
+    if (_serviceReport.isEmpty) {
+      return ListView(padding: const EdgeInsets.all(16), children: [
+        _DateChip(label: label, onTap: _pickDate),
+        const SizedBox(height: 24),
+        _EmptyState(message: 'No service data for $label'),
+      ]);
+    }
+
+    final totalCents = _serviceReport.fold<int>(
+        0, (s, r) => s + ((r['total_cents'] as int?) ?? 0));
+
+    return ListView(padding: const EdgeInsets.all(16), children: [
+      _DateChip(label: label, onTap: _pickDate),
+      const SizedBox(height: 12),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Month Total: \$${(totalCents / 100).toStringAsFixed(2)}',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text('${_serviceReport.length} service type${_serviceReport.length == 1 ? '' : 's'}',
+                style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ]),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Card(
+        child: Column(children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(children: const [
+              Expanded(flex: 5, child: Text('Service',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                      color: Colors.grey))),
+              Expanded(flex: 2, child: Text('Count',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                      color: Colors.grey))),
+              Expanded(flex: 3, child: Text('Total',
+                  textAlign: TextAlign.right,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                      color: Colors.grey))),
+            ]),
+          ),
+          const Divider(height: 1),
+          ..._serviceReport.asMap().entries.map((entry) {
+            final i     = entry.key;
+            final row   = entry.value;
+            final name  = (row['service_name'] ?? 'Unknown').toString();
+            final count = (row['count'] as int?) ?? 0;
+            final cents = (row['total_cents'] as int?) ?? 0;
+            return Container(
+              color: i.isEven
+                  ? Colors.transparent
+                  : Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                child: Row(children: [
+                  Expanded(flex: 5, child: Text(name,
+                      style: const TextStyle(fontSize: 13))),
+                  Expanded(flex: 2, child: Text('$count',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 13))),
+                  Expanded(flex: 3, child: Text(
+                      '\$${(cents / 100).toStringAsFixed(2)}',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600))),
+                ]),
+              ),
+            );
+          }),
+        ]),
+      ),
+    ]);
+  }
+
+  // ── Estimates tab ─────────────────────────────────────────────────────────
+
+  Widget _buildEstimatesTab() {
+    if (_openEstimates.isEmpty) {
+      return const Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.description_outlined, size: 48, color: Colors.grey),
+          SizedBox(height: 12),
+          Text('No open estimates',
+              style: TextStyle(fontSize: 16, color: Colors.grey)),
+        ]),
+      );
+    }
+
+    return Column(children: [
+      Container(
+        width: double.infinity,
+        color: Colors.amber.shade50,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(children: [
+          const Icon(Icons.description_outlined, color: Colors.amber),
+          const SizedBox(width: 8),
+          Text('${_openEstimates.length} open estimate${_openEstimates.length == 1 ? '' : 's'}',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.refresh, size: 20),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            onPressed: _load,
+            tooltip: 'Refresh',
+          ),
+        ]),
+      ),
+      Expanded(
+        child: ListView.separated(
+          padding: const EdgeInsets.all(12),
+          itemCount: _openEstimates.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (_, i) {
+            final est    = _openEstimates[i];
+            final num    = (est['invoice_number'] ?? '—').toString();
+            final date   = (est['invoice_date']  ?? '').toString();
+            final name   = (est['customer_name'] ?? 'Unknown').toString();
+            final cents  = (est['amount_cents']  as int?) ?? 0;
+            final parts  = date.split('-');
+            final dLabel = parts.length == 3
+                ? '${int.tryParse(parts[1]) ?? parts[1]}/${int.tryParse(parts[2]) ?? parts[2]}/${parts[0]}'
+                : date;
+            return ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: Text('#$num',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.amber.shade800)),
+                ),
+              ),
+              title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text(dLabel,
+                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              trailing: Text(
+                cents > 0 ? '\$${(cents / 100).toStringAsFixed(2)}' : 'No total',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: cents > 0 ? Colors.black87 : Colors.grey),
+              ),
+            );
+          },
+        ),
+      ),
     ]);
   }
 
